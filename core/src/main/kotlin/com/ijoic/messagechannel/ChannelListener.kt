@@ -24,6 +24,11 @@ package com.ijoic.messagechannel
  */
 interface ChannelListener {
   /**
+   * Bind [host]
+   */
+  fun bind(host: Channel)
+
+  /**
    * Channel active
    */
   fun onChannelActive(writer: ChannelWriter)

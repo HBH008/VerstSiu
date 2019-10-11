@@ -149,7 +149,12 @@ abstract class Channel(
           }
           is PingMessage -> if (isChannelActive && isChannelReady) {
             val writer = activeWriter ?: return
-            writer.write(message.data)
+
+            try {
+              writer.write(message.data)
+            } catch (e: Exception) {
+              onError?.invoke(e)
+            }
           }
           is ConnectionComplete -> {
             onResetRetryConnection()
@@ -184,9 +189,13 @@ abstract class Channel(
           is AddListener -> {
             val changed = listeners.add(message.data)
 
-            if (changed && isChannelActive && isChannelReady) {
-              val writer = activeWriter ?: return
-              message.data.onChannelActive(writer)
+            if (changed) {
+              message.data.bind(this@Channel)
+
+              if (isChannelActive && isChannelReady) {
+                val writer = activeWriter ?: return
+                message.data.onChannelActive(writer)
+              }
             }
           }
           is RemoveListener -> {

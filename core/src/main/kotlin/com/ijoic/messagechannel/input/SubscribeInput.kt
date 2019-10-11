@@ -17,9 +17,11 @@
  */
 package com.ijoic.messagechannel.input
 
+import com.ijoic.messagechannel.Channel
 import com.ijoic.messagechannel.ChannelListener
 import com.ijoic.messagechannel.ChannelWriter
 import com.ijoic.messagechannel.util.TaskQueue
+import java.lang.Exception
 import java.lang.ref.WeakReference
 import java.util.concurrent.Executors
 
@@ -35,6 +37,7 @@ class SubscribeInput<DATA: Any>(
 ) : ChannelListener {
 
   private val executor = Executors.newScheduledThreadPool(1)
+  private var refHost: WeakReference<Channel>? = null
   private var refWriter: WeakReference<ChannelWriter>? = null
 
   private var editId = 0
@@ -91,6 +94,10 @@ class SubscribeInput<DATA: Any>(
         }
       }
     })
+  }
+
+  override fun bind(host: Channel) {
+    refHost = WeakReference(host)
   }
 
   override fun onChannelActive(writer: ChannelWriter) {
@@ -151,13 +158,19 @@ class SubscribeInput<DATA: Any>(
   }
 
   private fun sendSubscribeMessages(writer: ChannelWriter, messages: Set<DATA>, operation: Operation) {
-    if (mapSubscribeMerge != null && mergeGroupSize > 1) {
-      messages.chunked(mergeGroupSize).forEach {
-        writer.write(mapSubscribeMerge.invoke(operation, it))
+    try {
+      if (mapSubscribeMerge != null && mergeGroupSize > 1) {
+        messages.chunked(mergeGroupSize).forEach {
+          writer.write(mapSubscribeMerge.invoke(operation, it))
+        }
+
+      } else {
+        messages.forEach { writer.write(mapSubscribe(operation, it)) }
       }
 
-    } else {
-      messages.forEach { writer.write(mapSubscribe(operation, it)) }
+    } catch (e: Exception) {
+      val host = refHost?.get() ?: return
+      host.onError?.invoke(e)
     }
   }
 
