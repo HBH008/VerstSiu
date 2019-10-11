@@ -1,7 +1,7 @@
 package com.ijoic.messagechannel.util
 
-import java.util.concurrent.Executors
 import java.util.concurrent.Future
+import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 
 /**
@@ -9,9 +9,10 @@ import java.util.concurrent.TimeUnit
  *
  * @author verstsiu created at 2019-10-08 11:12
  */
-internal class TaskQueue(handler: Handler) {
+internal class TaskQueue(
+  private val executor: ScheduledExecutorService,
+  handler: Handler) {
 
-  private val executor by lazy { Executors.newScheduledThreadPool(1) }
   private val task by lazy { HandlerTask(handler) }
 
   /**

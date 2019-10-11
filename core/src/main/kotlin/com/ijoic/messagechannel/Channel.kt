@@ -1,8 +1,12 @@
 package com.ijoic.messagechannel
 
+import com.ijoic.messagechannel.options.PingOptions
 import com.ijoic.messagechannel.options.RetryOptions
+import com.ijoic.messagechannel.util.PingManager
 import com.ijoic.messagechannel.util.RetryManager
 import com.ijoic.messagechannel.util.TaskQueue
+import com.ijoic.messagechannel.util.checkAndCancel
+import java.util.concurrent.Executors
 import java.util.concurrent.Future
 
 /**
@@ -10,7 +14,9 @@ import java.util.concurrent.Future
  *
  * @author verstsiu created at 2019-10-10 11:23
  */
-abstract class Channel(options: RetryOptions?) {
+abstract class Channel(
+  pingOptions: PingOptions? = null,
+  retryOptions: RetryOptions? = null) {
 
   /**
    * Message callback
@@ -35,6 +41,15 @@ abstract class Channel(options: RetryOptions?) {
   private var isChannelActive = true
   private var isChannelPrepare = false
   private var isChannelReady = false
+  private var isRefreshPrepare = false
+
+  private val executor = Executors.newScheduledThreadPool(1)
+  private val pingManager = PingManager(
+    executor,
+    pingOptions ?: PingOptions(enabled = false),
+    { notifyPingRequired(it) },
+    { notifyRestartConnection() }
+  )
 
   /**
    * Prepare channel
@@ -62,6 +77,7 @@ abstract class Channel(options: RetryOptions?) {
   /* -- task :begin -- */
 
   private val taskQueue = TaskQueue(
+    executor,
     object : TaskQueue.Handler {
       override fun onHandleTaskMessage(message: Any) {
         when (message) {
@@ -69,6 +85,11 @@ abstract class Channel(options: RetryOptions?) {
             isChannelPrepare = true
             onResetRetryConnection()
             onPrepareConnection()
+          }
+          RESTART_PREPARE -> if (isChannelActive && isChannelReady) {
+            isChannelReady = false
+            isRefreshPrepare = true
+            onCloseConnection()
           }
           PREPARE -> if (isChannelActive && !isChannelReady && !isChannelPrepare) {
             isChannelPrepare = true
@@ -84,9 +105,16 @@ abstract class Channel(options: RetryOptions?) {
           }
           CLOSE_COMPLETE -> {
             onClosed?.invoke()
+            pingManager.onConnectionClosed()
 
             if (isChannelActive) {
-              onScheduleRetryConnection()
+              if (isRefreshPrepare) {
+                isRefreshPrepare = false
+                isChannelPrepare = true
+                onPrepareConnection()
+              } else {
+                onScheduleRetryConnection()
+              }
             }
           }
           is SendMessage -> if (isChannelActive) {
@@ -101,26 +129,35 @@ abstract class Channel(options: RetryOptions?) {
               onPrepareConnection()
             }
           }
+          is PingMessage -> if (isChannelActive && isChannelReady) {
+            val writer = activeWriter ?: return
+            writer.write(message.data)
+          }
           is ConnectionComplete -> {
             onResetRetryConnection()
             onOpen?.invoke()
             activeWriter = message.writer
             isChannelReady = true
             isChannelPrepare = false
+            isRefreshPrepare = false
             sendMessagesAll(message.writer)
 
             if (!isChannelActive) {
               isChannelReady = false
               onCloseConnection()
+            } else {
+              pingManager.onConnectionComplete()
             }
           }
           is ConnectionFailure -> {
             activeWriter = null
             isChannelReady = false
             isChannelPrepare = false
+            isRefreshPrepare = false
             onError?.invoke(message.error)
 
             if (isChannelActive) {
+              pingManager.onConnectionFailure()
               onScheduleRetryConnection()
             }
           }
@@ -166,7 +203,20 @@ abstract class Channel(options: RetryOptions?) {
   }
 
   protected fun notifyMessageReceived(message: Any) {
-    onMessage?.invoke(message)
+    val isPongMessage = pingManager.checkPongMessage(message)
+    pingManager.onReceivedMessage(isPongMessage)
+
+    if (!isPongMessage) {
+      onMessage?.invoke(message)
+    }
+  }
+
+  private fun notifyPingRequired(message: Any) {
+    taskQueue.execute(PingMessage(message))
+  }
+
+  private fun notifyRestartConnection() {
+    taskQueue.execute(RESTART_PREPARE)
   }
 
   protected fun notifyConnectionClosed() {
@@ -177,6 +227,13 @@ abstract class Channel(options: RetryOptions?) {
    * Send message
    */
   private data class SendMessage(
+    val data: Any
+  )
+
+  /**
+   * Ping message
+   */
+  private data class PingMessage(
     val data: Any
   )
 
@@ -198,7 +255,7 @@ abstract class Channel(options: RetryOptions?) {
 
   /* -- retry :begin -- */
 
-  private val retryManager = RetryManager(options ?: RetryOptions())
+  private val retryManager = RetryManager(retryOptions ?: RetryOptions())
   private var retryTask: Future<*>? = null
 
   private fun onScheduleRetryConnection() {
@@ -216,10 +273,7 @@ abstract class Channel(options: RetryOptions?) {
   private fun clearRetryTask() {
     val task = retryTask ?: return
     retryTask = null
-
-    if (!task.isDone && !task.isCancelled) {
-      task.cancel(true)
-    }
+    task.checkAndCancel()
   }
 
   /* -- retry :end -- */
@@ -238,6 +292,7 @@ abstract class Channel(options: RetryOptions?) {
 
   companion object {
     private const val RESET_PREPARE = "reset_prepare"
+    private const val RESTART_PREPARE = "restart_prepare"
     private const val PREPARE = "prepare"
     private const val CLOSE = "close"
     private const val CLOSE_COMPLETE = "close_complete"

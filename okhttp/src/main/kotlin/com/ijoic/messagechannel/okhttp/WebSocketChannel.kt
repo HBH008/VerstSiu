@@ -2,6 +2,7 @@ package com.ijoic.messagechannel.okhttp
 
 import com.ijoic.messagechannel.Channel
 import com.ijoic.messagechannel.ChannelWriter
+import com.ijoic.messagechannel.options.PingOptions
 import com.ijoic.messagechannel.options.RetryOptions
 import okhttp3.*
 import okio.ByteString
@@ -15,7 +16,7 @@ import java.net.Proxy
  *
  * @author verstsiu created at 2019-10-08 11:02
  */
-class WebSocketChannel(options: Options) : Channel(options.retryOptions) {
+class WebSocketChannel(options: Options) : Channel(options.pingOptions, options.retryOptions) {
 
   constructor(url: String): this(Options(url))
 
@@ -34,6 +35,8 @@ class WebSocketChannel(options: Options) : Channel(options.retryOptions) {
     }
     .build()
 
+  private val decodeBytes: ((ByteArray) -> String?)? = options.decodeBytes
+
   override fun onPrepareConnection() {
     client.newWebSocket(request, object : WebSocketListener() {
       override fun onOpen(webSocket: WebSocket, response: Response) {
@@ -49,7 +52,12 @@ class WebSocketChannel(options: Options) : Channel(options.retryOptions) {
       }
 
       override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
-        notifyMessageReceived(bytes)
+        if (decodeBytes != null) {
+          val text = decodeBytes.invoke(bytes.toByteArray()) ?: return
+          notifyMessageReceived(text)
+        } else {
+          notifyMessageReceived(bytes)
+        }
       }
 
       override fun onMessage(webSocket: WebSocket, text: String) {
@@ -88,6 +96,8 @@ class WebSocketChannel(options: Options) : Channel(options.retryOptions) {
     val url: String,
     val proxyHost: String? = null,
     val proxyPort: Int? = null,
-    val retryOptions: RetryOptions? = null
+    val pingOptions: PingOptions? = null,
+    val retryOptions: RetryOptions? = null,
+    val decodeBytes: ((ByteArray) -> String?)? = null
   )
 }
