@@ -116,6 +116,7 @@ abstract class Channel(
                 onScheduleRetryConnection()
               }
             }
+            listeners.forEach { it.onChannelInactive() }
           }
           is SendMessage -> if (isChannelActive) {
             messages.add(message.data)
@@ -147,6 +148,7 @@ abstract class Channel(
               onCloseConnection()
             } else {
               pingManager.onConnectionComplete()
+              listeners.forEach { it.onChannelActive(message.writer) }
             }
           }
           is ConnectionFailure -> {
@@ -159,6 +161,22 @@ abstract class Channel(
             if (isChannelActive) {
               pingManager.onConnectionFailure()
               onScheduleRetryConnection()
+            }
+            listeners.forEach { it.onChannelInactive() }
+          }
+          is AddListener -> {
+            val changed = listeners.add(message.data)
+
+            if (changed && isChannelActive && isChannelReady) {
+              val writer = activeWriter ?: return
+              message.data.onChannelActive(writer)
+            }
+          }
+          is RemoveListener -> {
+            val changed = listeners.remove(message.data)
+
+            if (changed) {
+              message.data.onChannelInactive()
             }
           }
         }
@@ -277,6 +295,40 @@ abstract class Channel(
   }
 
   /* -- retry :end -- */
+
+  /* -- event :begin -- */
+
+  private val listeners = mutableSetOf<ChannelListener>()
+
+  /**
+   * Add channel [listener]
+   */
+  fun addChannelListener(listener: ChannelListener) {
+    taskQueue.execute(AddListener(listener))
+  }
+
+  /**
+   * Remove channel [listener]
+   */
+  fun removeChannelListener(listener: ChannelListener) {
+    taskQueue.execute(RemoveListener(listener))
+  }
+
+  /**
+   * Add listener
+   */
+  private data class AddListener(
+    val data: ChannelListener
+  )
+
+  /**
+   * Remove listener
+   */
+  private data class RemoveListener(
+    val data: ChannelListener
+  )
+
+  /* -- event :end -- */
 
   private fun sendMessagesAll(writer: ChannelWriter) {
     if (messages.isEmpty()) {
