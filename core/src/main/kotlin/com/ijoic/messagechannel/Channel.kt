@@ -1,13 +1,16 @@
 package com.ijoic.messagechannel
 
+import com.ijoic.messagechannel.options.RetryOptions
+import com.ijoic.messagechannel.util.RetryManager
 import com.ijoic.messagechannel.util.TaskQueue
+import java.util.concurrent.Future
 
 /**
  * Channel
  *
  * @author verstsiu created at 2019-10-10 11:23
  */
-abstract class Channel {
+abstract class Channel(options: RetryOptions?) {
 
   /**
    * Message callback
@@ -38,7 +41,7 @@ abstract class Channel {
    */
   fun prepare() {
     isChannelActive = true
-    taskQueue.execute(PREPARE)
+    taskQueue.execute(RESET_PREPARE)
   }
 
   /**
@@ -62,16 +65,29 @@ abstract class Channel {
     object : TaskQueue.Handler {
       override fun onHandleTaskMessage(message: Any) {
         when (message) {
+          RESET_PREPARE -> if (isChannelActive && !isChannelReady && !isChannelPrepare) {
+            isChannelPrepare = true
+            onResetRetryConnection()
+            onPrepareConnection()
+          }
           PREPARE -> if (isChannelActive && !isChannelReady && !isChannelPrepare) {
             isChannelPrepare = true
             onPrepareConnection()
           }
-          CLOSE -> if (!isChannelActive && isChannelReady) {
-            isChannelReady = false
-            onCloseConnection()
+          CLOSE -> if (!isChannelActive) {
+            onResetRetryConnection()
+
+            if (isChannelReady) {
+              isChannelReady = false
+              onCloseConnection()
+            }
           }
-          CLOSE_COMPLETE -> if (!isChannelActive) {
+          CLOSE_COMPLETE -> {
             onClosed?.invoke()
+
+            if (isChannelActive) {
+              onScheduleRetryConnection()
+            }
           }
           is SendMessage -> if (isChannelActive) {
             messages.add(message.data)
@@ -81,10 +97,12 @@ abstract class Channel {
               sendMessagesAll(writer)
             } else if (!isChannelPrepare) {
               isChannelPrepare = true
+              onResetRetryConnection()
               onPrepareConnection()
             }
           }
           is ConnectionComplete -> {
+            onResetRetryConnection()
             onOpen?.invoke()
             activeWriter = message.writer
             isChannelReady = true
@@ -101,6 +119,10 @@ abstract class Channel {
             isChannelReady = false
             isChannelPrepare = false
             onError?.invoke(message.error)
+
+            if (isChannelActive) {
+              onScheduleRetryConnection()
+            }
           }
         }
       }
@@ -174,6 +196,34 @@ abstract class Channel {
 
   /* -- task :end -- */
 
+  /* -- retry :begin -- */
+
+  private val retryManager = RetryManager(options ?: RetryOptions())
+  private var retryTask: Future<*>? = null
+
+  private fun onScheduleRetryConnection() {
+    clearRetryTask()
+
+    val duration = retryManager.nextInterval() ?: return
+    retryTask = taskQueue.schedule(PREPARE, duration.toMillis())
+  }
+
+  private fun onResetRetryConnection() {
+    clearRetryTask()
+    retryManager.reset()
+  }
+
+  private fun clearRetryTask() {
+    val task = retryTask ?: return
+    retryTask = null
+
+    if (!task.isDone && !task.isCancelled) {
+      task.cancel(true)
+    }
+  }
+
+  /* -- retry :end -- */
+
   private fun sendMessagesAll(writer: ChannelWriter) {
     if (messages.isEmpty()) {
       return
@@ -187,6 +237,7 @@ abstract class Channel {
   }
 
   companion object {
+    private const val RESET_PREPARE = "reset_prepare"
     private const val PREPARE = "prepare"
     private const val CLOSE = "close"
     private const val CLOSE_COMPLETE = "close_complete"

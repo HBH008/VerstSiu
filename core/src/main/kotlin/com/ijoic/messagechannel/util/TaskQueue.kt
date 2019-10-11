@@ -1,6 +1,8 @@
 package com.ijoic.messagechannel.util
 
 import java.util.concurrent.Executors
+import java.util.concurrent.Future
+import java.util.concurrent.TimeUnit
 
 /**
  * Task queue
@@ -9,7 +11,7 @@ import java.util.concurrent.Executors
  */
 internal class TaskQueue(handler: Handler) {
 
-  private val executor by lazy { Executors.newSingleThreadExecutor() }
+  private val executor by lazy { Executors.newScheduledThreadPool(1) }
   private val task by lazy { HandlerTask(handler) }
 
   /**
@@ -22,6 +24,13 @@ internal class TaskQueue(handler: Handler) {
       task.prepare()
       executor.submit(task)
     }
+  }
+
+  /**
+   * Schedule [message]
+   */
+  fun schedule(message: Any, delayMs: Long): Future<*> {
+    return executor.schedule({ execute(message) }, delayMs, TimeUnit.MILLISECONDS)
   }
 
   /**

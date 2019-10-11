@@ -2,6 +2,7 @@ package com.ijoic.messagechannel.okhttp
 
 import com.ijoic.messagechannel.Channel
 import com.ijoic.messagechannel.ChannelWriter
+import com.ijoic.messagechannel.options.RetryOptions
 import okhttp3.*
 import okio.ByteString
 import java.lang.IllegalArgumentException
@@ -12,7 +13,9 @@ import java.lang.ref.WeakReference
  *
  * @author verstsiu created at 2019-10-08 11:02
  */
-class WebSocketChannel(private val url: String) : Channel() {
+class WebSocketChannel(
+  private val url: String,
+  options: RetryOptions? = null) : Channel(options) {
 
   override fun onPrepareConnection() {
     val request = Request.Builder().url(url).build()
