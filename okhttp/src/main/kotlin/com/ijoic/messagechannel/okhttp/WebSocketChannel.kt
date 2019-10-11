@@ -7,20 +7,34 @@ import okhttp3.*
 import okio.ByteString
 import java.lang.IllegalArgumentException
 import java.lang.ref.WeakReference
+import java.net.InetSocketAddress
+import java.net.Proxy
 
 /**
  * WebSocket channel
  *
  * @author verstsiu created at 2019-10-08 11:02
  */
-class WebSocketChannel(
-  private val url: String,
-  options: RetryOptions? = null) : Channel(options) {
+class WebSocketChannel(options: Options) : Channel(options.retryOptions) {
+
+  constructor(url: String): this(Options(url))
+
+  private val request = Request.Builder()
+    .url(options.url)
+    .build()
+
+  private val client = OkHttpClient.Builder()
+    .apply {
+      val host = options.proxyHost
+      val port = options.proxyPort
+
+      if (!host.isNullOrBlank() && port != null) {
+        proxy(Proxy(Proxy.Type.HTTP, InetSocketAddress(host, port)))
+      }
+    }
+    .build()
 
   override fun onPrepareConnection() {
-    val request = Request.Builder().url(url).build()
-    val client = OkHttpClient()
-
     client.newWebSocket(request, object : WebSocketListener() {
       override fun onOpen(webSocket: WebSocket, response: Response) {
         notifyConnectionComplete(WebSocketWriter(webSocket))
@@ -67,4 +81,13 @@ class WebSocketChannel(
     }
   }
 
+  /**
+   * Options
+   */
+  data class Options(
+    val url: String,
+    val proxyHost: String? = null,
+    val proxyPort: Int? = null,
+    val retryOptions: RetryOptions? = null
+  )
 }
