@@ -17,13 +17,7 @@
  */
 package com.ijoic.messagechannel.input
 
-import com.ijoic.messagechannel.Channel
-import com.ijoic.messagechannel.ChannelListener
 import com.ijoic.messagechannel.ChannelWriter
-import com.ijoic.messagechannel.util.TaskQueue
-import java.lang.Exception
-import java.lang.ref.WeakReference
-import java.util.concurrent.Executors
 
 /**
  * Subscribe input
@@ -34,11 +28,7 @@ class SubscribeInput<DATA: Any>(
   private val mapSubscribe: (Operation, DATA) -> Any,
   private val mapSubscribeMerge: ((Operation, Collection<DATA>) -> Any)? = null,
   private val mergeGroupSize: Int = 0
-) : ChannelListener {
-
-  private val executor = Executors.newScheduledThreadPool(1)
-  private var refHost: WeakReference<Channel>? = null
-  private var refWriter: WeakReference<ChannelWriter>? = null
+) : ChannelInput() {
 
   private var editId = 0
 
@@ -52,11 +42,11 @@ class SubscribeInput<DATA: Any>(
   fun add(subscribe: DATA) {
     val editId = this.editId++
 
-    taskQueue.execute(Runnable {
-      val writer = refWriter?.get()
+    post(Runnable {
+      val writer = activeWriter
 
       if (writer == null) {
-        mergeAllMessagesAsSubscribe()
+        onWriterInactive()
         subscribeItems.add(subscribe)
       } else {
         unsubscribeItems.remove(subscribe)
@@ -65,7 +55,32 @@ class SubscribeInput<DATA: Any>(
           subscribeItems.add(subscribe)
         }
         if (editId == this.editId) {
-          sendAllMessages(writer)
+          onWriterActive(writer)
+        }
+      }
+    })
+  }
+
+  /**
+   * Add all [subscribe]
+   */
+  fun addAll(subscribe: Collection<DATA>) {
+    val editId = this.editId++
+
+    post(Runnable {
+      val writer = activeWriter
+
+      if (writer == null) {
+        onWriterInactive()
+        subscribeItems.addAll(subscribe)
+      } else {
+        unsubscribeItems.removeAll(subscribe)
+
+        subscribeItems.addAll(subscribe)
+        subscribeItems.removeAll(activeItems)
+
+        if (editId == this.editId) {
+          onWriterActive(writer)
         }
       }
     })
@@ -77,11 +92,11 @@ class SubscribeInput<DATA: Any>(
   fun remove(subscribe: DATA) {
     val editId = this.editId++
 
-    taskQueue.execute(Runnable {
-      val writer = refWriter?.get()
+    post(Runnable {
+      val writer = activeWriter
 
       if (writer == null) {
-        mergeAllMessagesAsSubscribe()
+        onWriterInactive()
         subscribeItems.remove(subscribe)
       } else {
         subscribeItems.remove(subscribe)
@@ -90,62 +105,38 @@ class SubscribeInput<DATA: Any>(
           unsubscribeItems.add(subscribe)
         }
         if (editId == this.editId) {
-          sendAllMessages(writer)
+          onWriterActive(writer)
         }
       }
     })
   }
 
-  override fun bind(host: Channel) {
-    refHost = WeakReference(host)
-  }
+  /**
+   * Remove all [subscribe]
+   */
+  fun removeAll(subscribe: Collection<DATA>) {
+    val editId = this.editId++
 
-  override fun onChannelActive(writer: ChannelWriter) {
-    refWriter = WeakReference(writer)
-    taskQueue.execute(CHANNEL_ACTIVE)
-  }
+    post(Runnable {
+      val writer = activeWriter
 
-  override fun onChannelInactive() {
-    taskQueue.execute(CHANNEL_INACTIVE)
-  }
+      if (writer == null) {
+        onWriterInactive()
+        subscribeItems.removeAll(subscribe)
+      } else {
+        subscribeItems.removeAll(subscribe)
 
-  /* -- task :begin -- */
+        unsubscribeItems.addAll(subscribe)
+        unsubscribeItems.retainAll(activeItems)
 
-  private val taskQueue = TaskQueue(
-    executor,
-    object : TaskQueue.Handler {
-      override fun onHandleTaskMessage(message: Any) {
-        when (message) {
-          CHANNEL_ACTIVE -> {
-            val writer = refWriter?.get()
-
-            if (writer == null) {
-              mergeAllMessagesAsSubscribe()
-            } else {
-              sendAllMessages(writer)
-            }
-          }
-          CHANNEL_INACTIVE -> {
-            mergeAllMessagesAsSubscribe()
-          }
-          is Runnable -> message.run()
+        if (editId == this.editId) {
+          onWriterActive(writer)
         }
       }
-    }
-  )
-
-  private fun mergeAllMessagesAsSubscribe() {
-    if (activeItems.isNotEmpty()) {
-      subscribeItems.addAll(activeItems)
-      activeItems.clear()
-    }
-    if (unsubscribeItems.isNotEmpty()) {
-      subscribeItems.removeAll(unsubscribeItems)
-      unsubscribeItems.clear()
-    }
+    })
   }
 
-  private fun sendAllMessages(writer: ChannelWriter) {
+  override fun onWriterActive(writer: ChannelWriter) {
     subscribeItems.removeAll(activeItems)
     unsubscribeItems.retainAll(activeItems)
 
@@ -155,6 +146,17 @@ class SubscribeInput<DATA: Any>(
     activeItems.addAll(subscribeItems)
     subscribeItems.clear()
     unsubscribeItems.clear()
+  }
+
+  override fun onWriterInactive() {
+    if (activeItems.isNotEmpty()) {
+      subscribeItems.addAll(activeItems)
+      activeItems.clear()
+    }
+    if (unsubscribeItems.isNotEmpty()) {
+      subscribeItems.removeAll(unsubscribeItems)
+      unsubscribeItems.clear()
+    }
   }
 
   private fun sendSubscribeMessages(writer: ChannelWriter, messages: Set<DATA>, operation: Operation) {
@@ -169,12 +171,9 @@ class SubscribeInput<DATA: Any>(
       }
 
     } catch (e: Exception) {
-      val host = refHost?.get() ?: return
-      host.onError?.invoke(e)
+      notifyWriteError(e)
     }
   }
-
-  /* -- task :end -- */
 
   /**
    * Operation
@@ -191,8 +190,4 @@ class SubscribeInput<DATA: Any>(
     UNSUBSCRIBE
   }
 
-  companion object {
-    private const val CHANNEL_ACTIVE = "channel_active"
-    private const val CHANNEL_INACTIVE = "channel_inactive"
-  }
 }
