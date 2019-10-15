@@ -31,6 +31,7 @@ class SubscribeInput<DATA: Any>(
   private val mapSubscribe: (Operation, DATA) -> Any,
   private val mapSubscribeMerge: ((Operation, Collection<DATA>) -> Any)? = null,
   private val mergeGroupSize: Int = 0,
+  private val refreshMode: RefreshMode = RefreshMode.REPEAT,
   retryOnFailureDuration: Duration? = null
 ) : ChannelInput() {
 
@@ -112,6 +113,10 @@ class SubscribeInput<DATA: Any>(
   }
 
   private fun sendSubscribeMessages(writer: ChannelWriter, messages: Set<DATA>, operation: Operation) {
+    if (messages.isEmpty()) {
+      return
+    }
+
     try {
       if (mapSubscribeMerge != null && mergeGroupSize > 1) {
         messages.chunked(mergeGroupSize).forEach {
@@ -140,6 +145,21 @@ class SubscribeInput<DATA: Any>(
      * Unsubscribe
      */
     UNSUBSCRIBE
+  }
+
+  /**
+   * Refresh mode
+   */
+  enum class RefreshMode {
+    /**
+     * Repeat simple
+     */
+    REPEAT,
+
+    /**
+     * Clear and repeat subscribe
+     */
+    CLEAR_AND_REPEAT
   }
 
   /* -- handler :begin -- */
@@ -258,6 +278,9 @@ class SubscribeInput<DATA: Any>(
     }
 
     private fun commitSubscribeItems() {
+      if (refreshMode == RefreshMode.CLEAR_AND_REPEAT) {
+        sendSubscribeMessages(writer, refreshItems, Operation.UNSUBSCRIBE)
+      }
       sendSubscribeMessages(writer, refreshItems, Operation.SUBSCRIBE)
       sendSubscribeMessages(writer, subscribeItems, Operation.SUBSCRIBE)
       sendSubscribeMessages(writer, unsubscribeItems, Operation.UNSUBSCRIBE)
