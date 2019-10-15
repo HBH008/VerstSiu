@@ -91,6 +91,13 @@ abstract class Channel(
     taskQueue.execute(CLOSE)
   }
 
+  /**
+   * Refresh connection
+   */
+  fun refresh() {
+    notifyRestartConnection()
+  }
+
   /* -- task :begin -- */
 
   private val taskQueue = TaskQueue(
