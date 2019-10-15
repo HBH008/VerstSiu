@@ -69,16 +69,19 @@ class WebSocketChannel(options: Options) : Channel(options.pingOptions, options.
       }
 
       override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+        val receiveTime = System.currentTimeMillis()
+
         if (decodeBytes != null) {
           val text = decodeBytes.invoke(bytes.toByteArray()) ?: return
-          notifyMessageReceived(text)
+          notifyMessageReceived(receiveTime, text)
         } else {
-          notifyMessageReceived(bytes)
+          notifyMessageReceived(receiveTime, bytes)
         }
       }
 
       override fun onMessage(webSocket: WebSocket, text: String) {
-        notifyMessageReceived(text)
+        val receiveTime = System.currentTimeMillis()
+        notifyMessageReceived(receiveTime, text)
       }
     })
   }

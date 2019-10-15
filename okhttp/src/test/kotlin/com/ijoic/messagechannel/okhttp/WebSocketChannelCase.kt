@@ -22,7 +22,7 @@ import com.ijoic.messagechannel.Channel
 fun main() {
   val channel: Channel = WebSocketChannel("wss://echo.websocket.org")
   channel.onOpen = { println("connection opened") }
-  channel.onMessage = { println(it) }
+  channel.onMessage = { _, message -> println(message) }
   channel.onError = { it.printStackTrace() }
   channel.onClosed = { println("connection closed") }
   channel.send("hello world!")

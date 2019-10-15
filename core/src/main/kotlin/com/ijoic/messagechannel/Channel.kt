@@ -38,7 +38,7 @@ abstract class Channel(
   /**
    * Message callback
    */
-  var onMessage: ((Any) -> Unit)? = null
+  var onMessage: ((Long, Any) -> Unit)? = null
 
   /**
    * Error callback
@@ -246,12 +246,12 @@ abstract class Channel(
     taskQueue.execute(ConnectionFailure(error))
   }
 
-  protected fun notifyMessageReceived(message: Any) {
+  protected fun notifyMessageReceived(receiveTime: Long, message: Any) {
     val isPongMessage = pingManager.checkPongMessage(message)
     pingManager.onReceivedMessage(isPongMessage)
 
     if (!isPongMessage) {
-      onMessage?.invoke(message)
+      onMessage?.invoke(receiveTime, message)
     }
   }
 
