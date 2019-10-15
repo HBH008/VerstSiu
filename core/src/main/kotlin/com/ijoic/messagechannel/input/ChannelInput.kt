@@ -1,8 +1,6 @@
 package com.ijoic.messagechannel.input
 
-import com.ijoic.messagechannel.Channel
-import com.ijoic.messagechannel.ChannelListener
-import com.ijoic.messagechannel.ChannelWriter
+import com.ijoic.messagechannel.MessageChannel
 import com.ijoic.messagechannel.util.TaskQueue
 import java.lang.ref.WeakReference
 import java.util.concurrent.Executors
@@ -13,16 +11,16 @@ import java.util.concurrent.Future
  *
  * @author verstsiu created at 2019-10-12 09:37
  */
-abstract class ChannelInput : ChannelListener {
+abstract class ChannelInput : MessageChannel.ChannelListener {
 
   private val executor = Executors.newScheduledThreadPool(1)
-  private var refHost: WeakReference<Channel>? = null
-  private var refWriter: WeakReference<ChannelWriter>? = null
+  private var refHost: WeakReference<MessageChannel>? = null
+  private var refWriter: WeakReference<MessageChannel.ChannelWriter>? = null
 
   /**
    * Active writer
    */
-  protected val activeWriter: ChannelWriter?
+  protected val activeWriter: MessageChannel.ChannelWriter?
     get() = refWriter?.get()
 
   private val taskQueue = TaskQueue(
@@ -48,11 +46,11 @@ abstract class ChannelInput : ChannelListener {
     }
   )
 
-  override fun bind(host: Channel) {
+  override fun bind(host: MessageChannel) {
     refHost = WeakReference(host)
   }
 
-  override fun onChannelActive(writer: ChannelWriter) {
+  override fun onChannelActive(writer: MessageChannel.ChannelWriter) {
     refWriter = WeakReference(writer)
     taskQueue.execute(CHANNEL_ACTIVE)
   }
@@ -64,7 +62,7 @@ abstract class ChannelInput : ChannelListener {
   /**
    * Writer active
    */
-  protected abstract fun onWriterActive(writer: ChannelWriter)
+  protected abstract fun onWriterActive(writer: MessageChannel.ChannelWriter)
 
   /**
    * Writer inactive

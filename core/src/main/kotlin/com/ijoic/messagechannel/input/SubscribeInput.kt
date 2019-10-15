@@ -17,7 +17,7 @@
  */
 package com.ijoic.messagechannel.input
 
-import com.ijoic.messagechannel.ChannelWriter
+import com.ijoic.messagechannel.MessageChannel
 import com.ijoic.messagechannel.util.checkAndCancel
 import java.time.Duration
 import java.util.concurrent.Future
@@ -92,7 +92,7 @@ class SubscribeInput<DATA: Any>(
     })
   }
 
-  override fun onWriterActive(writer: ChannelWriter) {
+  override fun onWriterActive(writer: MessageChannel.ChannelWriter) {
     val oldHandler = this.handler
     val handler = ActiveHandler(writer)
     this.handler = handler
@@ -112,7 +112,7 @@ class SubscribeInput<DATA: Any>(
     }
   }
 
-  private fun sendSubscribeMessages(writer: ChannelWriter, messages: Set<DATA>, operation: Operation) {
+  private fun sendSubscribeMessages(writer: MessageChannel.ChannelWriter, messages: Set<DATA>, operation: Operation) {
     if (messages.isEmpty()) {
       return
     }
@@ -174,7 +174,7 @@ class SubscribeInput<DATA: Any>(
   /**
    * Active handler
    */
-  private inner class ActiveHandler(private val writer: ChannelWriter) : Handler<DATA> {
+  private inner class ActiveHandler(private val writer: MessageChannel.ChannelWriter) : Handler<DATA> {
     override fun prepare() {
       commitSubscribeItems()
     }

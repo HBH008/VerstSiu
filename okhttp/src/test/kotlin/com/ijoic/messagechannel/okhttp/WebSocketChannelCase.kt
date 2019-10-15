@@ -17,10 +17,10 @@
  */
 package com.ijoic.messagechannel.okhttp
 
-import com.ijoic.messagechannel.Channel
+import com.ijoic.messagechannel.MessageChannel
 
 fun main() {
-  val channel: Channel = WebSocketChannel("wss://echo.websocket.org")
+  val channel: MessageChannel = WebSocketChannel("wss://echo.websocket.org")
   channel.onOpen = { println("connection opened") }
   channel.onMessage = { _, message -> println(message) }
   channel.onError = { it.printStackTrace() }

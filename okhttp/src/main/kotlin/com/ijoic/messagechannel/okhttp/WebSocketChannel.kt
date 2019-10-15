@@ -17,13 +17,11 @@
  */
 package com.ijoic.messagechannel.okhttp
 
-import com.ijoic.messagechannel.Channel
-import com.ijoic.messagechannel.ChannelWriter
+import com.ijoic.messagechannel.MessageChannel
 import com.ijoic.messagechannel.options.PingOptions
 import com.ijoic.messagechannel.options.RetryOptions
 import okhttp3.*
 import okio.ByteString
-import java.lang.IllegalArgumentException
 import java.lang.ref.WeakReference
 import java.net.InetSocketAddress
 import java.net.Proxy
@@ -33,7 +31,7 @@ import java.net.Proxy
  *
  * @author verstsiu created at 2019-10-08 11:02
  */
-class WebSocketChannel(options: Options) : Channel(options.pingOptions, options.retryOptions) {
+class WebSocketChannel(options: Options) : MessageChannel(options.pingOptions, options.retryOptions) {
 
   constructor(url: String): this(Options(url))
 
