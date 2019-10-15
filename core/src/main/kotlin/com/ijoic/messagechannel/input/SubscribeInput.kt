@@ -80,6 +80,17 @@ class SubscribeInput<DATA: Any>(
     })
   }
 
+  /**
+   * Refresh [subscribe]
+   */
+  fun refresh(subscribe: DATA) {
+    val editId = this.editId++
+
+    post(Runnable {
+      handler.refresh(subscribe, editId == this.editId)
+    })
+  }
+
   override fun onWriterActive(writer: ChannelWriter) {
     val oldHandler = this.handler
     val handler = ActiveHandler(writer)
@@ -138,6 +149,7 @@ class SubscribeInput<DATA: Any>(
   private val unsubscribeItems = mutableSetOf<DATA>()
 
   private val failItems = mutableSetOf<DATA>()
+  private val refreshItems = mutableSetOf<DATA>()
 
   /**
    * Active handler
@@ -148,7 +160,7 @@ class SubscribeInput<DATA: Any>(
     }
 
     override fun add(subscribe: DATA, isCommitRequired: Boolean) {
-      if (!failItems.contains(subscribe) && !activeItems.contains(subscribe)) {
+      if (!failItems.contains(subscribe) && !refreshItems.contains(subscribe) && !activeItems.contains(subscribe)) {
         subscribeItems.add(subscribe)
         unsubscribeItems.remove(subscribe)
       }
@@ -159,7 +171,10 @@ class SubscribeInput<DATA: Any>(
     }
 
     override fun addAll(subscribeItems: Collection<DATA>, isCommitRequired: Boolean) {
-      val items = subscribeItems.toMutableList().apply { removeAll(failItems) }
+      val items = subscribeItems.toMutableList().apply {
+        removeAll(failItems)
+        removeAll(refreshItems)
+      }
       unsubscribeItems.removeAll(items)
 
       this@SubscribeInput.subscribeItems.addAll(items)
@@ -171,9 +186,17 @@ class SubscribeInput<DATA: Any>(
     }
 
     override fun remove(subscribe: DATA, isCommitRequired: Boolean) {
-      if (!failItems.contains(subscribe) && activeItems.contains(subscribe)) {
-        unsubscribeItems.add(subscribe)
-        subscribeItems.remove(subscribe)
+      when {
+        failItems.contains(subscribe) -> {
+          failItems.remove(subscribe)
+        }
+        refreshItems.contains(subscribe) -> {
+          refreshItems.remove(subscribe)
+        }
+        activeItems.contains(subscribe) -> {
+          unsubscribeItems.add(subscribe)
+          subscribeItems.remove(subscribe)
+        }
       }
 
       if (isCommitRequired) {
@@ -182,11 +205,35 @@ class SubscribeInput<DATA: Any>(
     }
 
     override fun removeAll(subscribeItems: Collection<DATA>, isCommitRequired: Boolean) {
-      val items = subscribeItems.toMutableList().apply { removeAll(failItems) }
-      this@SubscribeInput.subscribeItems.removeAll(items)
+      this@SubscribeInput.subscribeItems.removeAll(subscribeItems)
+      failItems.removeAll(subscribeItems)
+      refreshItems.removeAll(subscribeItems)
 
-      unsubscribeItems.addAll(items)
+      unsubscribeItems.addAll(subscribeItems)
       unsubscribeItems.retainAll(activeItems)
+
+      if (isCommitRequired) {
+        commitSubscribeItems()
+      }
+    }
+
+    override fun refresh(subscribe: DATA, isCommitRequired: Boolean) {
+      when {
+        failItems.contains(subscribe) -> {
+          failItems.remove(subscribe)
+          refreshItems.add(subscribe)
+        }
+        subscribeItems.contains(subscribe) -> {
+          // do nothing
+        }
+        unsubscribeItems.contains(subscribe) -> {
+          // do nothing
+        }
+        activeItems.contains(subscribe) -> {
+          activeItems.remove(subscribe)
+          refreshItems.add(subscribe)
+        }
+      }
 
       if (isCommitRequired) {
         commitSubscribeItems()
@@ -200,6 +247,7 @@ class SubscribeInput<DATA: Any>(
       activeItems.remove(subscribe)
       subscribeItems.remove(subscribe)
       unsubscribeItems.remove(subscribe)
+      refreshItems.remove(subscribe)
       scheduleRetryTask()
     }
 
@@ -210,11 +258,15 @@ class SubscribeInput<DATA: Any>(
     }
 
     private fun commitSubscribeItems() {
+      sendSubscribeMessages(writer, refreshItems, Operation.SUBSCRIBE)
       sendSubscribeMessages(writer, subscribeItems, Operation.SUBSCRIBE)
       sendSubscribeMessages(writer, unsubscribeItems, Operation.UNSUBSCRIBE)
 
       activeItems.addAll(subscribeItems)
+      activeItems.addAll(refreshItems)
+      activeItems.removeAll(unsubscribeItems)
       subscribeItems.clear()
+      refreshItems.clear()
       unsubscribeItems.clear()
     }
   }
@@ -227,6 +279,10 @@ class SubscribeInput<DATA: Any>(
       if (activeItems.isNotEmpty()) {
         subscribeItems.addAll(activeItems)
         activeItems.clear()
+      }
+      if (failItems.isNotEmpty()) {
+        subscribeItems.addAll(failItems)
+        failItems.clear()
       }
       if (unsubscribeItems.isNotEmpty()) {
         subscribeItems.removeAll(unsubscribeItems)
@@ -249,6 +305,10 @@ class SubscribeInput<DATA: Any>(
 
     override fun removeAll(subscribeItems: Collection<DATA>, isCommitRequired: Boolean) {
       this@SubscribeInput.subscribeItems.removeAll(subscribeItems)
+    }
+
+    override fun refresh(subscribe: DATA, isCommitRequired: Boolean) {
+      subscribeItems.add(subscribe)
     }
 
     override fun onSubscribeFailed(subscribe: DATA) {
@@ -290,6 +350,11 @@ class SubscribeInput<DATA: Any>(
      * Remove all [subscribeItems]
      */
     fun removeAll(subscribeItems: Collection<DATA>, isCommitRequired: Boolean)
+
+    /**
+     * Refresh [subscribe]
+     */
+    fun refresh(subscribe: DATA, isCommitRequired: Boolean)
 
     /**
      * Subscribe failed
