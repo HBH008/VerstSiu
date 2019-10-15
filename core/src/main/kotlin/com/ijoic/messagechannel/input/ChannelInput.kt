@@ -6,6 +6,7 @@ import com.ijoic.messagechannel.ChannelWriter
 import com.ijoic.messagechannel.util.TaskQueue
 import java.lang.ref.WeakReference
 import java.util.concurrent.Executors
+import java.util.concurrent.Future
 
 /**
  * Channel input
@@ -75,6 +76,13 @@ abstract class ChannelInput : ChannelListener {
    */
   protected fun post(runnable: Runnable) {
     taskQueue.execute(runnable)
+  }
+
+  /**
+   * Schedule [runnable] with [delayMs]
+   */
+  protected fun schedule(runnable: Runnable, delayMs: Long) : Future<*> {
+    return taskQueue.schedule(runnable, delayMs)
   }
 
   /**

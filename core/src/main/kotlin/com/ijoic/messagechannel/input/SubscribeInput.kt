@@ -18,6 +18,9 @@
 package com.ijoic.messagechannel.input
 
 import com.ijoic.messagechannel.ChannelWriter
+import com.ijoic.messagechannel.util.checkAndCancel
+import java.time.Duration
+import java.util.concurrent.Future
 
 /**
  * Subscribe input
@@ -27,14 +30,11 @@ import com.ijoic.messagechannel.ChannelWriter
 class SubscribeInput<DATA: Any>(
   private val mapSubscribe: (Operation, DATA) -> Any,
   private val mapSubscribeMerge: ((Operation, Collection<DATA>) -> Any)? = null,
-  private val mergeGroupSize: Int = 0
+  private val mergeGroupSize: Int = 0,
+  retryOnFailureDuration: Duration? = null
 ) : ChannelInput() {
 
   private var editId = 0
-
-  private val activeItems = mutableSetOf<DATA>()
-  private val subscribeItems = mutableSetOf<DATA>()
-  private val unsubscribeItems = mutableSetOf<DATA>()
 
   /**
    * Add [subscribe]
@@ -43,21 +43,7 @@ class SubscribeInput<DATA: Any>(
     val editId = this.editId++
 
     post(Runnable {
-      val writer = activeWriter
-
-      if (writer == null) {
-        onWriterInactive()
-        subscribeItems.add(subscribe)
-      } else {
-        unsubscribeItems.remove(subscribe)
-
-        if (!activeItems.contains(subscribe)) {
-          subscribeItems.add(subscribe)
-        }
-        if (editId == this.editId) {
-          onWriterActive(writer)
-        }
-      }
+      handler.add(subscribe, editId == this.editId)
     })
   }
 
@@ -68,21 +54,7 @@ class SubscribeInput<DATA: Any>(
     val editId = this.editId++
 
     post(Runnable {
-      val writer = activeWriter
-
-      if (writer == null) {
-        onWriterInactive()
-        subscribeItems.addAll(subscribe)
-      } else {
-        unsubscribeItems.removeAll(subscribe)
-
-        subscribeItems.addAll(subscribe)
-        subscribeItems.removeAll(activeItems)
-
-        if (editId == this.editId) {
-          onWriterActive(writer)
-        }
-      }
+      handler.addAll(subscribe, editId == this.editId)
     })
   }
 
@@ -93,21 +65,7 @@ class SubscribeInput<DATA: Any>(
     val editId = this.editId++
 
     post(Runnable {
-      val writer = activeWriter
-
-      if (writer == null) {
-        onWriterInactive()
-        subscribeItems.remove(subscribe)
-      } else {
-        subscribeItems.remove(subscribe)
-
-        if (activeItems.contains(subscribe)) {
-          unsubscribeItems.add(subscribe)
-        }
-        if (editId == this.editId) {
-          onWriterActive(writer)
-        }
-      }
+      handler.remove(subscribe, editId == this.editId)
     })
   }
 
@@ -118,44 +76,27 @@ class SubscribeInput<DATA: Any>(
     val editId = this.editId++
 
     post(Runnable {
-      val writer = activeWriter
-
-      if (writer == null) {
-        onWriterInactive()
-        subscribeItems.removeAll(subscribe)
-      } else {
-        subscribeItems.removeAll(subscribe)
-
-        unsubscribeItems.addAll(subscribe)
-        unsubscribeItems.retainAll(activeItems)
-
-        if (editId == this.editId) {
-          onWriterActive(writer)
-        }
-      }
+      handler.removeAll(subscribe, editId == this.editId)
     })
   }
 
   override fun onWriterActive(writer: ChannelWriter) {
-    subscribeItems.removeAll(activeItems)
-    unsubscribeItems.retainAll(activeItems)
+    val oldHandler = this.handler
+    val handler = ActiveHandler(writer)
+    this.handler = handler
 
-    sendSubscribeMessages(writer, subscribeItems, Operation.SUBSCRIBE)
-    sendSubscribeMessages(writer, unsubscribeItems, Operation.UNSUBSCRIBE)
-
-    activeItems.addAll(subscribeItems)
-    subscribeItems.clear()
-    unsubscribeItems.clear()
+    if (oldHandler != inactiveHandler) {
+      inactiveHandler.prepare()
+    }
+    handler.prepare()
   }
 
   override fun onWriterInactive() {
-    if (activeItems.isNotEmpty()) {
-      subscribeItems.addAll(activeItems)
-      activeItems.clear()
-    }
-    if (unsubscribeItems.isNotEmpty()) {
-      subscribeItems.removeAll(unsubscribeItems)
-      unsubscribeItems.clear()
+    val oldHandler = this.handler
+
+    if (oldHandler != inactiveHandler) {
+      this.handler = inactiveHandler
+      inactiveHandler.prepare()
     }
   }
 
@@ -188,6 +129,219 @@ class SubscribeInput<DATA: Any>(
      * Unsubscribe
      */
     UNSUBSCRIBE
+  }
+
+  /* -- handler :begin -- */
+
+  private val activeItems = mutableSetOf<DATA>()
+  private val subscribeItems = mutableSetOf<DATA>()
+  private val unsubscribeItems = mutableSetOf<DATA>()
+
+  private val failItems = mutableSetOf<DATA>()
+
+  /**
+   * Active handler
+   */
+  private inner class ActiveHandler(private val writer: ChannelWriter) : Handler<DATA> {
+    override fun prepare() {
+      commitSubscribeItems()
+    }
+
+    override fun add(subscribe: DATA, isCommitRequired: Boolean) {
+      if (!failItems.contains(subscribe) && !activeItems.contains(subscribe)) {
+        subscribeItems.add(subscribe)
+        unsubscribeItems.remove(subscribe)
+      }
+
+      if (isCommitRequired) {
+        commitSubscribeItems()
+      }
+    }
+
+    override fun addAll(subscribeItems: Collection<DATA>, isCommitRequired: Boolean) {
+      val items = subscribeItems.toMutableList().apply { removeAll(failItems) }
+      unsubscribeItems.removeAll(items)
+
+      this@SubscribeInput.subscribeItems.addAll(items)
+      this@SubscribeInput.removeAll(activeItems)
+
+      if (isCommitRequired) {
+        commitSubscribeItems()
+      }
+    }
+
+    override fun remove(subscribe: DATA, isCommitRequired: Boolean) {
+      if (!failItems.contains(subscribe) && activeItems.contains(subscribe)) {
+        unsubscribeItems.add(subscribe)
+        subscribeItems.remove(subscribe)
+      }
+
+      if (isCommitRequired) {
+        commitSubscribeItems()
+      }
+    }
+
+    override fun removeAll(subscribeItems: Collection<DATA>, isCommitRequired: Boolean) {
+      val items = subscribeItems.toMutableList().apply { removeAll(failItems) }
+      this@SubscribeInput.subscribeItems.removeAll(items)
+
+      unsubscribeItems.addAll(items)
+      unsubscribeItems.retainAll(activeItems)
+
+      if (isCommitRequired) {
+        commitSubscribeItems()
+      }
+    }
+
+    override fun onSubscribeFailed(subscribe: DATA) {
+      if (!failItems.add(subscribe)) {
+        return
+      }
+      activeItems.remove(subscribe)
+      subscribeItems.remove(subscribe)
+      unsubscribeItems.remove(subscribe)
+      scheduleRetryTask()
+    }
+
+    override fun onFailRetry() {
+      sendSubscribeMessages(writer, failItems, Operation.SUBSCRIBE)
+      activeItems.addAll(failItems)
+      failItems.clear()
+    }
+
+    private fun commitSubscribeItems() {
+      sendSubscribeMessages(writer, subscribeItems, Operation.SUBSCRIBE)
+      sendSubscribeMessages(writer, unsubscribeItems, Operation.UNSUBSCRIBE)
+
+      activeItems.addAll(subscribeItems)
+      subscribeItems.clear()
+      unsubscribeItems.clear()
+    }
+  }
+
+  /**
+   * Inactive handler
+   */
+  private val inactiveHandler = object : Handler<DATA> {
+    override fun prepare() {
+      if (activeItems.isNotEmpty()) {
+        subscribeItems.addAll(activeItems)
+        activeItems.clear()
+      }
+      if (unsubscribeItems.isNotEmpty()) {
+        subscribeItems.removeAll(unsubscribeItems)
+        unsubscribeItems.clear()
+      }
+      clearRetryTask()
+    }
+
+    override fun add(subscribe: DATA, isCommitRequired: Boolean) {
+      subscribeItems.add(subscribe)
+    }
+
+    override fun addAll(subscribeItems: Collection<DATA>, isCommitRequired: Boolean) {
+      this@SubscribeInput.subscribeItems.addAll(subscribeItems)
+    }
+
+    override fun remove(subscribe: DATA, isCommitRequired: Boolean) {
+      subscribeItems.remove(subscribe)
+    }
+
+    override fun removeAll(subscribeItems: Collection<DATA>, isCommitRequired: Boolean) {
+      this@SubscribeInput.subscribeItems.removeAll(subscribeItems)
+    }
+
+    override fun onSubscribeFailed(subscribe: DATA) {
+      // do nothing
+    }
+
+    override fun onFailRetry() {
+      // do nothing
+    }
+  }
+
+  private var handler: Handler<DATA> = inactiveHandler
+
+  /**
+   * Handler
+   */
+  private interface Handler<DATA: Any> {
+    /**
+     * Prepare handler
+     */
+    fun prepare()
+
+    /**
+     * Add [subscribe]
+     */
+    fun add(subscribe: DATA, isCommitRequired: Boolean)
+
+    /**
+     * Add all [subscribeItems]
+     */
+    fun addAll(subscribeItems: Collection<DATA>, isCommitRequired: Boolean)
+
+    /**
+     * Remove [subscribe]
+     */
+    fun remove(subscribe: DATA, isCommitRequired: Boolean)
+
+    /**
+     * Remove all [subscribeItems]
+     */
+    fun removeAll(subscribeItems: Collection<DATA>, isCommitRequired: Boolean)
+
+    /**
+     * Subscribe failed
+     */
+    fun onSubscribeFailed(subscribe: DATA)
+
+    /**
+     * Fail retry
+     */
+    fun onFailRetry()
+  }
+
+  /* -- handler :end -- */
+
+  /* -- state :begin -- */
+
+  private val retryOnFailureEnabled = retryOnFailureDuration != null && retryOnFailureDuration.toMillis() >= 0
+  private val retryOnFailureMs = retryOnFailureDuration?.toMillis()?.coerceAtLeast(MIN_RETRY_MS) ?: 0L
+
+  private var retryTask: Future<*>? = null
+
+  /**
+   * Notify [subscribe] failure
+   */
+  fun notifySubscribeFailure(subscribe: DATA) {
+    if (!retryOnFailureEnabled) {
+      return
+    }
+    post(Runnable {
+      handler.onSubscribeFailed(subscribe)
+    })
+  }
+
+  private fun scheduleRetryTask() {
+    val oldTask = retryTask
+
+    if (oldTask == null || oldTask.isDone || oldTask.isCancelled) {
+      retryTask = schedule(Runnable {
+        handler.onFailRetry()
+      }, retryOnFailureMs)
+    }
+  }
+
+  private fun clearRetryTask() {
+    retryTask?.checkAndCancel()
+    retryTask = null
+  }
+
+  /* -- state :end -- */
+
+  companion object {
+    private const val MIN_RETRY_MS = 100L
   }
 
 }
