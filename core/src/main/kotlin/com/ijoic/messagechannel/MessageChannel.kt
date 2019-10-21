@@ -138,13 +138,18 @@ abstract class MessageChannel(
               onPrepareConnection()
             }
           }
-          is PingMessage -> if (isChannelActive && isChannelReady) {
-            val writer = activeWriter ?: return
+          is PingMessage -> {
+            if (isChannelActive && isChannelReady) {
+              logInfo("send ping message: ${message.data}")
+              val writer = activeWriter ?: return
 
-            try {
-              writer.write(message.data)
-            } catch (e: Exception) {
-              onError?.invoke(e)
+              try {
+                writer.write(message.data)
+              } catch (e: Exception) {
+                onError?.invoke(e)
+              }
+            } else {
+              logInfo("ping cancelled: ${message.data}")
             }
           }
           is ConnectionComplete -> {
@@ -245,6 +250,8 @@ abstract class MessageChannel(
 
     if (!isPongMessage) {
       onMessage?.invoke(receiveTime, message)
+    } else {
+      logInfo("receive pong message: $message")
     }
   }
 
