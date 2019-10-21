@@ -31,7 +31,7 @@ import java.net.Proxy
  *
  * @author verstsiu created at 2019-10-08 11:02
  */
-class WebSocketChannel(options: Options) : MessageChannel(options.pingOptions, options.retryOptions) {
+class WebSocketChannel(private val options: Options) : MessageChannel(options.pingOptions, options.retryOptions) {
 
   constructor(url: String): this(Options(url))
 
@@ -55,14 +55,22 @@ class WebSocketChannel(options: Options) : MessageChannel(options.pingOptions, o
   override fun onPrepareConnection() {
     client.newWebSocket(request, object : WebSocketListener() {
       override fun onOpen(webSocket: WebSocket, response: Response) {
+        logInfo("[${options.url}] connection open")
         notifyConnectionComplete(WebSocketWriter(webSocket))
       }
 
       override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+        logInfo("[${options.url}] connection failure: ${response?.code} - ${t.message} / ${t::class.java.name}")
         notifyConnectionFailure(t)
       }
 
+      override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+        logInfo("connection closing: $code - $reason")
+        webSocket.close(code, reason)
+      }
+
       override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+        logInfo("connection closed: $code - $reason")
         notifyConnectionClosed()
       }
 
@@ -82,6 +90,10 @@ class WebSocketChannel(options: Options) : MessageChannel(options.pingOptions, o
         notifyMessageReceived(receiveTime, text)
       }
     })
+  }
+
+  override fun toString(): String {
+    return options.url
   }
 
   /**
@@ -118,4 +130,5 @@ class WebSocketChannel(options: Options) : MessageChannel(options.pingOptions, o
     val retryOptions: RetryOptions? = null,
     val decodeBytes: ((ByteArray) -> String?)? = null
   )
+
 }

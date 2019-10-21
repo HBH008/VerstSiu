@@ -59,6 +59,7 @@ abstract class MessageChannel(
   )
 
   override fun prepare() {
+    logInfo("channel prepare")
     isChannelActive = true
     taskQueue.execute(RESET_PREPARE)
   }
@@ -71,10 +72,12 @@ abstract class MessageChannel(
   }
 
   override fun refresh() {
+    logInfo("channel refresh")
     notifyRestartConnection()
   }
 
   override fun close() {
+    logInfo("channel closed")
     isChannelActive = false
     taskQueue.execute(CLOSE)
   }
@@ -171,6 +174,8 @@ abstract class MessageChannel(
             if (isChannelActive) {
               pingManager.onConnectionFailure()
               onScheduleRetryConnection()
+            } else {
+              logInfo("retry cancelled: channel inactive")
             }
             listeners.forEach { it.onChannelInactive() }
           }

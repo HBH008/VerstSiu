@@ -17,6 +17,8 @@
  */
 package com.ijoic.messagechannel
 
+import java.util.logging.Logger
+
 /**
  * Channel
  *
@@ -47,4 +49,15 @@ abstract class Channel {
    * Close channel
    */
   abstract fun close()
+
+  /**
+   * Log info [message]
+   */
+  protected fun logInfo(message: String) {
+    logger.fine("[$this] $message")
+  }
+
+  companion object {
+    private val logger = Logger.getLogger(Channel::class.java.name)
+  }
 }

@@ -30,7 +30,7 @@ import java.net.Proxy
  *
  * @author verstsiu created at 2019-10-15 18:10
  */
-class HttpChannel(options: Options) : RequestChannel() {
+class HttpChannel(private val options: Options) : RequestChannel() {
 
   constructor(url: String): this(Options(url))
 
@@ -63,6 +63,10 @@ class HttpChannel(options: Options) : RequestChannel() {
     } catch (e: Exception) {
       onError?.invoke(e)
     }
+  }
+
+  override fun toString(): String {
+    return options.url
   }
 
   /**
