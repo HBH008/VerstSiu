@@ -55,12 +55,12 @@ class WebSocketChannel(private val options: Options) : MessageChannel(options.pi
   override fun onPrepareConnection() {
     client.newWebSocket(request, object : WebSocketListener() {
       override fun onOpen(webSocket: WebSocket, response: Response) {
-        logInfo("[${options.url}] connection open")
+        logInfo("connection open")
         notifyConnectionComplete(WebSocketWriter(webSocket))
       }
 
       override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-        logInfo("[${options.url}] connection failure: ${response?.code} - ${t.message} / ${t::class.java.name}")
+        logInfo("connection failure: ${response?.code} - ${t.message} / ${t::class.java.name}")
         notifyConnectionFailure(t)
       }
 
