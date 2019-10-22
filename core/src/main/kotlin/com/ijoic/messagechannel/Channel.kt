@@ -18,6 +18,7 @@
 package com.ijoic.messagechannel
 
 import org.apache.logging.log4j.LogManager
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Channel
@@ -25,6 +26,10 @@ import org.apache.logging.log4j.LogManager
  * @author verstsiu created at 2019-10-15 18:51
  */
 abstract class Channel {
+
+  private val channelId = seedId.getAndIncrement()
+  protected open val channelName: String = this.toString()
+
   /**
    * Message callback
    */
@@ -54,17 +59,18 @@ abstract class Channel {
    * Log info [message]
    */
   protected fun logInfo(message: String) {
-    logger.trace("[$this] $message")
+    logger.trace("[$channelName - $channelId] $message")
   }
 
   /**
    * Log error [message]
    */
   protected fun logError(message: String, t: Throwable) {
-    logger.error("[$this] $message", t)
+    logger.error("[$channelName - $channelId] $message", t)
   }
 
   companion object {
+    private val seedId = AtomicInteger()
     private val logger = LogManager.getLogger(Channel::class.java)
   }
 }

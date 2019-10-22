@@ -9,10 +9,10 @@
         </Console>
     </Appenders>
     <Loggers>
-        <logger name="com.ijoic.messagechannel.Channel" additivity="false">
+        <logger name="com.ijoic.messagechannel.Channel" level="trace" additivity="false">
             <AppenderRef ref="MCConsole"/>
         </logger>
-        <Root level="info">
+        <Root level="error">
             <AppenderRef ref="Console"/>
         </Root>
     </Loggers>

@@ -20,22 +20,6 @@ package com.ijoic.messagechannel.okhttp
 import com.ijoic.messagechannel.MessageChannel
 
 fun main() {
-//  Logger.getLogger(Channel::class.java.name).apply {
-//    this.level = Level.FINE
-//    this.addHandler(
-//      ConsoleHandler().apply {
-//        this.level = Level.FINE
-//        this.formatter = object : Formatter() {
-//          private val sf = SimpleDateFormat("yyyy-MM-dd hh:mm:ss.SSS")
-//
-//          override fun format(record: LogRecord?): String {
-//            record ?: return ""
-//            return "${sf.format(record.millis)} ${record.message}\n"
-//          }
-//        }
-//      }
-//    )
-//  }
   val channel: MessageChannel = WebSocketChannel("wss://echo.websocket.org")
   channel.onOpen = { println("connection opened") }
   channel.onMessage = { _, message -> println(message) }

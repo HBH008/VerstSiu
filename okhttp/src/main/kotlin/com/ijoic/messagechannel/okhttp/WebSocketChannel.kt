@@ -31,9 +31,11 @@ import java.net.Proxy
  *
  * @author verstsiu created at 2019-10-08 11:02
  */
-class WebSocketChannel(private val options: Options) : MessageChannel(options.pingOptions, options.retryOptions) {
+class WebSocketChannel(options: Options) : MessageChannel(options.pingOptions, options.retryOptions) {
 
   constructor(url: String): this(Options(url))
+
+  override val channelName = options.url
 
   private val request = Request.Builder()
     .url(options.url)
@@ -90,10 +92,6 @@ class WebSocketChannel(private val options: Options) : MessageChannel(options.pi
         notifyMessageReceived(receiveTime, text)
       }
     })
-  }
-
-  override fun toString(): String {
-    return options.url
   }
 
   /**
