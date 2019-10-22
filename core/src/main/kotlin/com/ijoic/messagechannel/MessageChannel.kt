@@ -167,7 +167,6 @@ abstract class MessageChannel(
               onCloseConnection()
             } else {
               listeners.forEach { it.onChannelActive(message.writer) }
-              logInfo("send message cancelled: channel inactive")
             }
           }
           is ConnectionFailure -> {
