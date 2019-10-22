@@ -160,13 +160,14 @@ abstract class MessageChannel(
             isChannelPrepare = false
             isRefreshPrepare = false
             sendMessagesAll(message.writer)
+            pingManager.onConnectionComplete()
 
             if (!isChannelActive) {
               isChannelReady = false
               onCloseConnection()
             } else {
-              pingManager.onConnectionComplete()
               listeners.forEach { it.onChannelActive(message.writer) }
+              logInfo("send message cancelled: channel inactive")
             }
           }
           is ConnectionFailure -> {
@@ -381,9 +382,13 @@ abstract class MessageChannel(
       return
     }
     try {
-      messages.forEach { writer.write(it) }
+      messages.forEach {
+        writer.write(it)
+        logInfo("send message: $it")
+      }
     } catch (e: Exception) {
       onError?.invoke(e)
+      logError("send message failed", e)
     }
     messages.clear()
   }
