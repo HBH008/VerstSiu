@@ -97,11 +97,12 @@ class WebSocketChannel(options: Options) : MessageChannel(options.pingOptions, o
   /**
    * WebSocket writer
    */
-  private class WebSocketWriter(socket: WebSocket, onSendMessage: (Any) -> Unit) : ChannelWriter {
+  private class WebSocketWriter(socket: WebSocket, private val onSendMessage: (Any) -> Unit) : ChannelWriter {
     private var refSocket: WeakReference<WebSocket>? = WeakReference(socket)
 
     override fun write(message: Any) {
       val socket = refSocket?.get() ?: return
+      onSendMessage.invoke(message)
 
       when (message) {
         is String -> socket.send(message)
