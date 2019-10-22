@@ -60,7 +60,7 @@ class WebSocketChannel(private val options: Options) : MessageChannel(options.pi
       }
 
       override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-        logInfo("connection failure: ${response?.code} - ${t.message} / ${t::class.java.name}")
+        logError("connection failure: ${response?.code}", t)
         notifyConnectionFailure(t)
       }
 

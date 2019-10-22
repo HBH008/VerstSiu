@@ -63,7 +63,7 @@ class HttpChannel(private val options: Options) : RequestChannel() {
 
     } catch (e: Exception) {
       onError?.invoke(e)
-      logInfo("request failed")
+      logError("request failed", e)
     }
   }
 
