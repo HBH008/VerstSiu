@@ -58,7 +58,7 @@ class WebSocketChannel(options: Options) : MessageChannel(options.pingOptions, o
     client.newWebSocket(request, object : WebSocketListener() {
       override fun onOpen(webSocket: WebSocket, response: Response) {
         logInfo("connection open")
-        notifyConnectionComplete(WebSocketWriter(webSocket))
+        notifyConnectionComplete(WebSocketWriter(webSocket) { logInfo("send message: $it") })
       }
 
       override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
@@ -97,7 +97,7 @@ class WebSocketChannel(options: Options) : MessageChannel(options.pingOptions, o
   /**
    * WebSocket writer
    */
-  private class WebSocketWriter(socket: WebSocket) : ChannelWriter {
+  private class WebSocketWriter(socket: WebSocket, onSendMessage: (Any) -> Unit) : ChannelWriter {
     private var refSocket: WeakReference<WebSocket>? = WeakReference(socket)
 
     override fun write(message: Any) {
