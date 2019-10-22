@@ -59,9 +59,11 @@ class HttpChannel(private val options: Options) : RequestChannel() {
       } else {
         throw IOException("response empty")
       }
+      logInfo("request complete")
 
     } catch (e: Exception) {
       onError?.invoke(e)
+      logInfo("request failed")
     }
   }
 
