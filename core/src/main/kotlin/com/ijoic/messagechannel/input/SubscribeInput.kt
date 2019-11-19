@@ -41,6 +41,7 @@ class SubscribeInput<DATA: Any>(
    * Add [subscribe]
    */
   fun add(subscribe: DATA) {
+    logOutput?.trace("add subscribe: $subscribe")
     val editId = this.editId++
 
     post(Runnable {
@@ -52,6 +53,7 @@ class SubscribeInput<DATA: Any>(
    * Add all [subscribe]
    */
   fun addAll(subscribe: Collection<DATA>) {
+    logOutput?.trace("add subscribe: ${subscribe.joinToString()}")
     val editId = this.editId++
 
     post(Runnable {
@@ -63,6 +65,7 @@ class SubscribeInput<DATA: Any>(
    * Remove [subscribe]
    */
   fun remove(subscribe: DATA) {
+    logOutput?.trace("remove subscribe: $subscribe")
     val editId = this.editId++
 
     post(Runnable {
@@ -74,6 +77,7 @@ class SubscribeInput<DATA: Any>(
    * Remove all [subscribe]
    */
   fun removeAll(subscribe: Collection<DATA>) {
+    logOutput?.trace("remove subscribe: ${subscribe.joinToString()}")
     val editId = this.editId++
 
     post(Runnable {
@@ -85,6 +89,7 @@ class SubscribeInput<DATA: Any>(
    * Refresh [subscribe]
    */
   fun refresh(subscribe: DATA) {
+    logOutput?.trace("refresh subscribe: $subscribe")
     val editId = this.editId++
 
     post(Runnable {
@@ -117,18 +122,13 @@ class SubscribeInput<DATA: Any>(
       return
     }
 
-    try {
-      if (mapSubscribeMerge != null && mergeGroupSize > 1) {
-        messages.chunked(mergeGroupSize).forEach {
-          writer.write(mapSubscribeMerge.invoke(operation, it))
-        }
-
-      } else {
-        messages.forEach { writer.write(mapSubscribe(operation, it)) }
+    if (mapSubscribeMerge != null && mergeGroupSize > 1) {
+      messages.chunked(mergeGroupSize).forEach {
+        writer.write(mapSubscribeMerge.invoke(operation, it))
       }
 
-    } catch (e: Exception) {
-      notifyWriteError(e)
+    } else {
+      messages.forEach { writer.write(mapSubscribe(operation, it)) }
     }
   }
 

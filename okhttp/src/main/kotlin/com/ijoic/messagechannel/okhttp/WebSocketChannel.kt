@@ -31,95 +31,96 @@ import java.net.Proxy
  *
  * @author verstsiu created at 2019-10-08 11:02
  */
-class WebSocketChannel(options: Options) : MessageChannel(options.pingOptions, options.retryOptions) {
+class WebSocketChannel(options: Options) : MessageChannel(
+  options.url,
+  WebSocketHandler(options),
+  options.pingOptions,
+  options.retryOptions
+) {
 
   constructor(url: String): this(Options(url))
-
-  override val channelName = options.url
-
-  private val request = Request.Builder()
-    .url(options.url)
-    .build()
-
-  private val client = OkHttpClient.Builder()
-    .apply {
-      val host = options.proxyHost
-      val port = options.proxyPort
-
-      if (!host.isNullOrBlank() && port != null) {
-        proxy(Proxy(Proxy.Type.HTTP, InetSocketAddress(host, port)))
-      }
-    }
-    .build()
-
-  private val decodeBytes: ((ByteArray) -> String?)? = options.decodeBytes
-
-  override fun onPrepareConnection() {
-    client.newWebSocket(request, object : WebSocketListener() {
-      override fun onOpen(webSocket: WebSocket, response: Response) {
-        logInfo("connection open")
-        notifyConnectionComplete(WebSocketWriter(webSocket) { logInfo("send message: $it") })
-      }
-
-      override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-        logError("connection failure: ${response?.code}", t)
-        notifyConnectionFailure(t)
-      }
-
-      override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-        logInfo("connection closing: $code - $reason")
-        webSocket.close(code, reason)
-      }
-
-      override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-        logInfo("connection closed: $code - $reason")
-        notifyConnectionClosed()
-      }
-
-      override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
-        val receiveTime = System.currentTimeMillis()
-
-        if (decodeBytes != null) {
-          val text = decodeBytes.invoke(bytes.toByteArray()) ?: return
-          notifyMessageReceived(receiveTime, text)
-        } else {
-          notifyMessageReceived(receiveTime, bytes)
-        }
-      }
-
-      override fun onMessage(webSocket: WebSocket, text: String) {
-        val receiveTime = System.currentTimeMillis()
-        notifyMessageReceived(receiveTime, text)
-      }
-    })
-  }
 
   /**
    * WebSocket writer
    */
-  private class WebSocketWriter(socket: WebSocket, private val logMessage: (String) -> Unit) : ChannelWriter {
+  private class WebSocketWriter(socket: WebSocket) : ChannelWriter() {
     private var refSocket: WeakReference<WebSocket>? = WeakReference(socket)
 
-    override fun write(message: Any) {
-      val socket = refSocket?.get()
-
-      if (socket == null) {
-        logMessage("send message cancelled: socket not found")
-        return
-      }
-      logMessage("send message: $message")
+    override fun onWriteMessage(message: Any): Boolean {
+      val socket = refSocket?.get() ?: return false
 
       when (message) {
         is String -> socket.send(message)
         is ByteString -> socket.send(message)
         else -> throw IllegalArgumentException("invalid message type: ${message.javaClass.canonicalName}")
       }
+      return true
     }
 
-    override fun close() {
+    override fun onClose() {
       val socket = refSocket?.get() ?: return
       refSocket = null
       socket.close(1000, "client close connection")
+    }
+  }
+
+  private class WebSocketHandler(options: Options) : PrepareHandler() {
+
+    private val request = Request.Builder()
+      .url(options.url)
+      .build()
+
+    private val client = OkHttpClient.Builder()
+      .apply {
+        val host = options.proxyHost
+        val port = options.proxyPort
+
+        if (!host.isNullOrBlank() && port != null) {
+          proxy(Proxy(Proxy.Type.HTTP, InetSocketAddress(host, port)))
+        }
+      }
+      .build()
+
+    private val decodeBytes: ((ByteArray) -> String?)? = options.decodeBytes
+
+    override fun onPrepareConnection(listener: StateListener) {
+      client.newWebSocket(request, object : WebSocketListener() {
+        override fun onOpen(webSocket: WebSocket, response: Response) {
+          logOutput?.info("connection open")
+          listener.onConnectionComplete(WebSocketWriter(webSocket))
+        }
+
+        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+          logOutput?.error("connection failure: ${response?.code}", t)
+          listener.onConnectionFailure(t)
+        }
+
+        override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+          logOutput?.info("connection closing: $code - $reason")
+          webSocket.close(code, reason)
+        }
+
+        override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+          logOutput?.info("connection closed: $code - $reason")
+          listener.onConnectionClosed()
+        }
+
+        override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+          val receiveTime = System.currentTimeMillis()
+
+          if (decodeBytes != null) {
+            val text = decodeBytes.invoke(bytes.toByteArray()) ?: return
+            listener.onMessageReceived(receiveTime, text)
+          } else {
+            listener.onMessageReceived(receiveTime, bytes)
+          }
+        }
+
+        override fun onMessage(webSocket: WebSocket, text: String) {
+          val receiveTime = System.currentTimeMillis()
+          listener.onMessageReceived(receiveTime, text)
+        }
+      })
     }
   }
 

@@ -17,6 +17,7 @@
  */
 package com.ijoic.messagechannel
 
+import com.ijoic.messagechannel.output.LogOutput
 import org.apache.logging.log4j.LogManager
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -25,10 +26,9 @@ import java.util.concurrent.atomic.AtomicInteger
  *
  * @author verstsiu created at 2019-10-15 18:51
  */
-abstract class Channel {
+abstract class Channel(name: String) {
 
-  private val channelId = seedId.getAndIncrement()
-  protected open val channelName: String = this.toString()
+  protected val logOutput: LogOutput = DefaultLogOutput("$name - ${seedId.getAndIncrement()}")
 
   /**
    * Message callback
@@ -56,17 +56,20 @@ abstract class Channel {
   abstract fun close()
 
   /**
-   * Log info [message]
+   * Default log output
    */
-  protected fun logInfo(message: String) {
-    logger.trace("[$channelName - $channelId] $message")
-  }
+  private class DefaultLogOutput(private val tag: String) : LogOutput {
+    override fun trace(message: String) {
+      logger.trace("[$tag] $message")
+    }
 
-  /**
-   * Log error [message]
-   */
-  protected fun logError(message: String, t: Throwable) {
-    logger.error("[$channelName - $channelId] $message", t)
+    override fun info(message: String) {
+      logger.info("[$tag] $message")
+    }
+
+    override fun error(message: String, t: Throwable) {
+      logger.error("[$tag] $message", t)
+    }
   }
 
   companion object {

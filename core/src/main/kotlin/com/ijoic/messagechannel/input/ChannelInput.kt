@@ -1,6 +1,7 @@
 package com.ijoic.messagechannel.input
 
 import com.ijoic.messagechannel.MessageChannel
+import com.ijoic.messagechannel.output.LogOutput
 import com.ijoic.messagechannel.util.TaskQueue
 import java.lang.ref.WeakReference
 import java.util.concurrent.Executors
@@ -14,8 +15,14 @@ import java.util.concurrent.Future
 abstract class ChannelInput : MessageChannel.ChannelListener {
 
   private val executor = Executors.newScheduledThreadPool(1)
-  private var refHost: WeakReference<MessageChannel>? = null
   private var refWriter: WeakReference<MessageChannel.ChannelWriter>? = null
+  private var refLogOutput: WeakReference<LogOutput>? = null
+
+  /**
+   * Log output
+   */
+  protected val logOutput: LogOutput?
+    get() = refLogOutput?.get()
 
   /**
    * Active writer
@@ -46,8 +53,8 @@ abstract class ChannelInput : MessageChannel.ChannelListener {
     }
   )
 
-  override fun bind(host: MessageChannel) {
-    refHost = WeakReference(host)
+  override fun bind(logOutput: LogOutput) {
+    refLogOutput = WeakReference(logOutput)
   }
 
   override fun onChannelActive(writer: MessageChannel.ChannelWriter) {
@@ -81,14 +88,6 @@ abstract class ChannelInput : MessageChannel.ChannelListener {
    */
   protected fun schedule(runnable: Runnable, delayMs: Long) : Future<*> {
     return taskQueue.schedule(runnable, delayMs)
-  }
-
-  /**
-   * Notify write error
-   */
-  protected fun notifyWriteError(error: Exception) {
-    val host = refHost?.get() ?: return
-    host.onError?.invoke(error)
   }
 
   companion object {

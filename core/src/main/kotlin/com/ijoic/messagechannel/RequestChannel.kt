@@ -25,7 +25,7 @@ import java.util.concurrent.Executors
  *
  * @author verstsiu created at 2019-10-15 19:01
  */
-abstract class RequestChannel : Channel() {
+abstract class RequestChannel(name: String) : Channel(name) {
 
   private val executor = Executors.newScheduledThreadPool(1)
 

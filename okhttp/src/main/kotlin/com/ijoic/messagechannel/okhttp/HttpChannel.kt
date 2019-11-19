@@ -30,11 +30,9 @@ import java.net.Proxy
  *
  * @author verstsiu created at 2019-10-15 18:10
  */
-class HttpChannel(options: Options) : RequestChannel() {
+class HttpChannel(options: Options) : RequestChannel(options.url) {
 
   constructor(url: String): this(Options(url))
-
-  override val channelName = options.url
 
   private val request by lazy { Request.Builder().url(options.url).build() }
   private val client = OkHttpClient.Builder()
@@ -61,11 +59,11 @@ class HttpChannel(options: Options) : RequestChannel() {
       } else {
         throw IOException("response empty")
       }
-      logInfo("request complete")
+      logOutput.info("request complete")
 
     } catch (e: Exception) {
       onError?.invoke(e)
-      logError("request failed", e)
+      logOutput.error("request failed", e)
     }
   }
 

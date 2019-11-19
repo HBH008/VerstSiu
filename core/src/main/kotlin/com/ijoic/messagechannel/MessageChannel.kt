@@ -19,6 +19,7 @@ package com.ijoic.messagechannel
 
 import com.ijoic.messagechannel.options.PingOptions
 import com.ijoic.messagechannel.options.RetryOptions
+import com.ijoic.messagechannel.output.LogOutput
 import com.ijoic.messagechannel.util.PingManager
 import com.ijoic.messagechannel.util.RetryManager
 import com.ijoic.messagechannel.util.TaskQueue
@@ -31,9 +32,11 @@ import java.util.concurrent.Future
  *
  * @author verstsiu created at 2019-10-10 11:23
  */
-abstract class MessageChannel(
+open class MessageChannel(
+  name: String,
+  private val handler: PrepareHandler,
   pingOptions: PingOptions? = null,
-  retryOptions: RetryOptions? = null): Channel() {
+  retryOptions: RetryOptions? = null): Channel(name) {
 
   /**
    * Open callback
@@ -58,8 +61,39 @@ abstract class MessageChannel(
     { notifyRestartConnection() }
   )
 
+  private val stateListener = object : StateListener {
+    override fun onConnectionComplete(writer: ChannelWriter) {
+      writer.logOutput = logOutput
+      writer.onError = onError
+      taskQueue.execute(ConnectionComplete(writer))
+    }
+
+    override fun onConnectionFailure(t: Throwable) {
+      taskQueue.execute(ConnectionFailure(t))
+    }
+
+    override fun onConnectionClosed() {
+      taskQueue.execute(CLOSE_COMPLETE)
+    }
+
+    override fun onMessageReceived(receiveTime: Long, message: Any) {
+      val isPongMessage = pingManager.checkPongMessage(message)
+      pingManager.onReceivedMessage(isPongMessage)
+
+      if (!isPongMessage) {
+        onMessage?.invoke(receiveTime, message)
+      } else {
+        logOutput.trace("receive pong message: $message")
+      }
+    }
+  }
+
+  init {
+    handler.logOutput = logOutput
+  }
+
   override fun prepare() {
-    logInfo("channel prepare")
+    logOutput.info("channel prepare")
     isChannelActive = true
     taskQueue.execute(RESET_PREPARE)
   }
@@ -72,12 +106,12 @@ abstract class MessageChannel(
   }
 
   override fun refresh() {
-    logInfo("channel refresh")
+    logOutput.info("channel refresh")
     notifyRestartConnection()
   }
 
   override fun close() {
-    logInfo("channel closed")
+    logOutput.info("channel closed")
     isChannelActive = false
     taskQueue.execute(CLOSE)
   }
@@ -99,9 +133,13 @@ abstract class MessageChannel(
             isRefreshPrepare = true
             onCloseConnection()
           }
-          PREPARE -> if (isChannelActive && !isChannelReady && !isChannelPrepare) {
-            isChannelPrepare = true
-            onPrepareConnection()
+          PREPARE -> {
+            if (isChannelActive && !isChannelReady && !isChannelPrepare) {
+              isChannelPrepare = true
+              onPrepareConnection()
+            } else {
+              logOutput.info("prepare cancelled: active - $isChannelActive, ready - $isChannelReady, prepare - $isChannelPrepare")
+            }
           }
           CLOSE -> if (!isChannelActive) {
             onResetRetryConnection()
@@ -112,6 +150,8 @@ abstract class MessageChannel(
             }
           }
           CLOSE_COMPLETE -> {
+            isChannelReady = false
+            isChannelPrepare = false
             onClosed?.invoke()
             pingManager.onConnectionClosed()
 
@@ -119,10 +159,14 @@ abstract class MessageChannel(
               if (isRefreshPrepare) {
                 isRefreshPrepare = false
                 isChannelPrepare = true
+                logOutput.info("closed to refresh")
                 onPrepareConnection()
               } else {
+                logOutput.info("closed to schedule retry")
                 onScheduleRetryConnection()
               }
+            } else {
+              logOutput.info("closed with channel inactive")
             }
             listeners.forEach { it.onChannelInactive() }
           }
@@ -140,16 +184,10 @@ abstract class MessageChannel(
           }
           is PingMessage -> {
             if (isChannelActive && isChannelReady) {
-              logInfo("send ping message: ${message.data}")
               val writer = activeWriter ?: return
-
-              try {
-                writer.write(message.data)
-              } catch (e: Exception) {
-                onError?.invoke(e)
-              }
+              writer.write(message.data)
             } else {
-              logInfo("ping cancelled: ${message.data}")
+              logOutput.trace("ping cancelled: ${message.data}")
             }
           }
           is ConnectionComplete -> {
@@ -180,7 +218,7 @@ abstract class MessageChannel(
               pingManager.onConnectionFailure()
               onScheduleRetryConnection()
             } else {
-              logInfo("retry cancelled: channel inactive")
+              logOutput.info("retry cancelled: channel inactive")
             }
             listeners.forEach { it.onChannelInactive() }
           }
@@ -188,7 +226,7 @@ abstract class MessageChannel(
             val changed = listeners.add(message.data)
 
             if (changed) {
-              message.data.bind(this@MessageChannel)
+              message.data.bind(logOutput)
 
               if (isChannelActive && isChannelReady) {
                 val writer = activeWriter ?: return
@@ -214,7 +252,9 @@ abstract class MessageChannel(
   /**
    * Prepare connection
    */
-  protected abstract fun onPrepareConnection()
+  private fun onPrepareConnection() {
+    handler.onPrepareConnection(stateListener)
+  }
 
   /**
    * Close connection
@@ -230,41 +270,12 @@ abstract class MessageChannel(
     }
   }
 
-  /**
-   * Notify connection complete
-   */
-  protected fun notifyConnectionComplete(writer: ChannelWriter) {
-    taskQueue.execute(ConnectionComplete(writer))
-  }
-
-  /**
-   * Notify connection failure
-   */
-  protected fun notifyConnectionFailure(error: Throwable) {
-    taskQueue.execute(ConnectionFailure(error))
-  }
-
-  protected fun notifyMessageReceived(receiveTime: Long, message: Any) {
-    val isPongMessage = pingManager.checkPongMessage(message)
-    pingManager.onReceivedMessage(isPongMessage)
-
-    if (!isPongMessage) {
-      onMessage?.invoke(receiveTime, message)
-    } else {
-      logInfo("receive pong message: $message")
-    }
-  }
-
   private fun notifyPingRequired(message: Any) {
     taskQueue.execute(PingMessage(message))
   }
 
   private fun notifyRestartConnection() {
     taskQueue.execute(RESTART_PREPARE)
-  }
-
-  protected fun notifyConnectionClosed() {
-    taskQueue.execute(CLOSE_COMPLETE)
   }
 
   /**
@@ -307,6 +318,7 @@ abstract class MessageChannel(
 
     val duration = retryManager.nextInterval() ?: return
     retryTask = taskQueue.schedule(PREPARE, duration.toMillis())
+    logOutput.info("schedule retry prepare: ${duration.toMillis()} ms")
   }
 
   private fun onResetRetryConnection() {
@@ -345,9 +357,9 @@ abstract class MessageChannel(
    */
   interface ChannelListener {
     /**
-     * Bind [host]
+     * Bind
      */
-    fun bind(host: MessageChannel)
+    fun bind(logOutput: LogOutput)
 
     /**
      * Channel active
@@ -380,33 +392,97 @@ abstract class MessageChannel(
     if (messages.isEmpty()) {
       return
     }
-    try {
-      messages.forEach {
-        writer.write(it)
-        logInfo("send message: $it")
-      }
-    } catch (e: Exception) {
-      onError?.invoke(e)
-      logError("send message failed", e)
+    messages.forEach {
+      writer.write(it)
     }
     messages.clear()
   }
 
   /**
+   * Prepare handler
+   */
+  abstract class PrepareHandler {
+    /**
+     * Log output
+     */
+    var logOutput: LogOutput? = null
+      internal set
+
+    /**
+     * Prepare connection
+     */
+    abstract fun onPrepareConnection(listener: StateListener)
+  }
+
+  /**
    * Channel writer
    */
-  interface ChannelWriter {
+  abstract class ChannelWriter {
+    /**
+     * Log output
+     */
+    internal var logOutput: LogOutput? = null
+
+    internal var onError: ((Throwable) -> Unit)? = null
+
     /**
      * Write [message]
      */
-    @Throws(Exception::class)
-    fun write(message: Any)
+    fun write(message: Any) {
+      try {
+        if (!onWriteMessage(message)) {
+          logOutput?.trace("send message cancelled: $message")
+        } else {
+          logOutput?.trace("send message: $message")
+        }
+      } catch (e: Exception) {
+        onError?.invoke(e)
+        logOutput?.error("send message failed", e)
+      }
+    }
 
     /**
      * Close writer
      */
+    fun close() {
+      try {
+        onClose()
+      } catch (e: Exception) {
+        onError?.invoke(e)
+        logOutput?.error("channel write close failed", e)
+      }
+    }
+
     @Throws(Exception::class)
-    fun close()
+    abstract fun onWriteMessage(message: Any): Boolean
+
+    @Throws(Exception::class)
+    abstract fun onClose()
+  }
+
+  /**
+   * State listener
+   */
+  interface StateListener {
+    /**
+     * Connection complete
+     */
+    fun onConnectionComplete(writer: ChannelWriter)
+
+    /**
+     * Connection failure
+     */
+    fun onConnectionFailure(t: Throwable)
+
+    /**
+     * Connection closed
+     */
+    fun onConnectionClosed()
+
+    /**
+     * Message received
+     */
+    fun onMessageReceived(receiveTime: Long, message: Any)
   }
 
   companion object {
