@@ -21,6 +21,7 @@ import com.ijoic.messagechannel.MessageChannel
 import com.ijoic.messagechannel.util.checkAndCancel
 import java.time.Duration
 import java.util.concurrent.Future
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Subscribe input
@@ -35,17 +36,17 @@ class SubscribeInput<DATA: Any>(
   retryOnFailureDuration: Duration? = null
 ) : ChannelInput() {
 
-  private var editId = 0
+  private val editId = AtomicInteger()
 
   /**
    * Add [subscribe]
    */
   fun add(subscribe: DATA) {
     logOutput?.trace("add subscribe: $subscribe")
-    val editId = this.editId++
+    val editId = this.editId.incrementAndGet()
 
     post(Runnable {
-      handler.add(subscribe, editId == this.editId)
+      handler.add(subscribe, editId == this.editId.get())
     })
   }
 
@@ -54,10 +55,10 @@ class SubscribeInput<DATA: Any>(
    */
   fun addAll(subscribe: Collection<DATA>) {
     logOutput?.trace("add subscribe: ${subscribe.joinToString()}")
-    val editId = this.editId++
+    val editId = this.editId.incrementAndGet()
 
     post(Runnable {
-      handler.addAll(subscribe, editId == this.editId)
+      handler.addAll(subscribe, editId == this.editId.get())
     })
   }
 
@@ -66,10 +67,10 @@ class SubscribeInput<DATA: Any>(
    */
   fun remove(subscribe: DATA) {
     logOutput?.trace("remove subscribe: $subscribe")
-    val editId = this.editId++
+    val editId = this.editId.incrementAndGet()
 
     post(Runnable {
-      handler.remove(subscribe, editId == this.editId)
+      handler.remove(subscribe, editId == this.editId.get())
     })
   }
 
@@ -78,10 +79,10 @@ class SubscribeInput<DATA: Any>(
    */
   fun removeAll(subscribe: Collection<DATA>) {
     logOutput?.trace("remove subscribe: ${subscribe.joinToString()}")
-    val editId = this.editId++
+    val editId = this.editId.incrementAndGet()
 
     post(Runnable {
-      handler.removeAll(subscribe, editId == this.editId)
+      handler.removeAll(subscribe, editId == this.editId.get())
     })
   }
 
@@ -90,10 +91,10 @@ class SubscribeInput<DATA: Any>(
    */
   fun refresh(subscribe: DATA) {
     logOutput?.trace("refresh subscribe: $subscribe")
-    val editId = this.editId++
+    val editId = this.editId.incrementAndGet()
 
     post(Runnable {
-      handler.refresh(subscribe, editId == this.editId)
+      handler.refresh(subscribe, editId == this.editId.get())
     })
   }
 
