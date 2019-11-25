@@ -172,6 +172,10 @@ class SubscribeInput<DATA: Any>(
   private val failItems = mutableSetOf<DATA>()
   private val refreshItems = mutableSetOf<DATA>()
 
+  override fun requiresConnectionActive(): Boolean {
+    return subscribeItems.isNotEmpty() || activeItems.isNotEmpty() || refreshItems.isNotEmpty() || failItems.isNotEmpty()
+  }
+
   /**
    * Active handler
    */

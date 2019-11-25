@@ -316,6 +316,10 @@ open class MessageChannel(
   private fun onScheduleRetryConnection() {
     clearRetryTask()
 
+    if (!requiresConnectionActive()) {
+      logOutput.info("schedule retry cancelled")
+      return
+    }
     val duration = retryManager.nextInterval() ?: return
     retryTask = taskQueue.schedule(PREPARE, duration.toMillis())
     logOutput.info("schedule retry prepare: ${duration.toMillis()} ms")
@@ -330,6 +334,17 @@ open class MessageChannel(
     val task = retryTask ?: return
     retryTask = null
     task.checkAndCancel()
+  }
+
+  private fun requiresConnectionActive(): Boolean {
+    if (!isChannelActive) {
+      return false
+    }
+    if (messages.isNotEmpty()) {
+      return true
+    }
+
+    return listeners.any { it.requiresConnectionActive() }
   }
 
   /* -- retry :end -- */
@@ -370,6 +385,11 @@ open class MessageChannel(
      * Channel inactive
      */
     fun onChannelInactive()
+
+    /**
+     * Returns connection active require status
+     */
+    fun requiresConnectionActive() = false
   }
 
   /**
