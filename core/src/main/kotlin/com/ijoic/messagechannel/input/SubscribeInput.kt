@@ -55,6 +55,7 @@ class SubscribeInput<DATA: Any>(
    */
   fun addAll(subscribe: Collection<DATA>) {
     logOutput?.trace("add subscribe: ${subscribe.joinToString()}")
+    println("$this add all subscribe: ${subscribe.joinToString()}")
     val editId = this.editId.incrementAndGet()
 
     post(Runnable {
@@ -79,6 +80,7 @@ class SubscribeInput<DATA: Any>(
    */
   fun removeAll(subscribe: Collection<DATA>) {
     logOutput?.trace("remove subscribe: ${subscribe.joinToString()}")
+    println("$this remove all subscribe: ${subscribe.joinToString()}")
     val editId = this.editId.incrementAndGet()
 
     post(Runnable {
@@ -199,11 +201,13 @@ class SubscribeInput<DATA: Any>(
       val items = subscribeItems.toMutableList().apply {
         removeAll(failItems)
         removeAll(refreshItems)
+        removeAll(activeItems)
       }
-      unsubscribeItems.removeAll(items)
 
-      this@SubscribeInput.subscribeItems.addAll(items)
-      this@SubscribeInput.removeAll(activeItems)
+      if (items.isNotEmpty()) {
+        this@SubscribeInput.subscribeItems.addAll(items)
+        unsubscribeItems.removeAll(items)
+      }
 
       if (isCommitRequired) {
         commitSubscribeItems()
