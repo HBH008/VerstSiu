@@ -36,8 +36,7 @@ open class MessageChannel(
   name: String,
   private val handler: PrepareHandler,
   pingOptions: PingOptions? = null,
-  retryOptions: RetryOptions? = null,
-  private val alwaysRequiresConnectionActive: Boolean = false): Channel(name) {
+  retryOptions: RetryOptions? = null): Channel(name) {
 
   /**
    * Open callback
@@ -340,7 +339,7 @@ open class MessageChannel(
   private fun requiresConnectionActive(): Boolean {
     return when {
       !isChannelActive -> false
-      alwaysRequiresConnectionActive || messages.isNotEmpty() -> true
+      retryManager.ignoreMessageSize || messages.isNotEmpty() -> true
       else -> listeners.any { it.requiresConnectionActive() }
     }
   }

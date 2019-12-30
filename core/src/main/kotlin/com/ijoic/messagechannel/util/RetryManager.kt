@@ -37,6 +37,11 @@ internal class RetryManager(options: RetryOptions) {
   private var intervalIndex = 0
 
   /**
+   * Ignore message size status
+   */
+  val ignoreMessageSize = options.ignoreMessageSize
+
+  /**
    * Returns next retry interval or null
    */
   fun nextInterval(): Duration? {

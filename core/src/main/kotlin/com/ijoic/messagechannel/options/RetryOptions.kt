@@ -36,5 +36,6 @@ data class RetryOptions(
     Duration.ofSeconds(10),
     Duration.ofSeconds(30),
     Duration.ofMinutes(1)
-  )
+  ),
+  val ignoreMessageSize: Boolean = false
 )
