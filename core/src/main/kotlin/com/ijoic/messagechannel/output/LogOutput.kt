@@ -29,6 +29,11 @@ interface LogOutput {
   fun trace(message: String)
 
   /**
+   * Debug info [message]
+   */
+  fun debug(message: String)
+
+  /**
    * Log info [message]
    */
   fun info(message: String)

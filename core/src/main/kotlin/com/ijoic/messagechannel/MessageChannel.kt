@@ -36,7 +36,8 @@ open class MessageChannel(
   name: String,
   private val handler: PrepareHandler,
   pingOptions: PingOptions? = null,
-  retryOptions: RetryOptions? = null): Channel(name) {
+  retryOptions: RetryOptions? = null,
+  private val alwaysRequiresConnectionActive: Boolean = false): Channel(name) {
 
   /**
    * Open callback
@@ -317,7 +318,7 @@ open class MessageChannel(
     clearRetryTask()
 
     if (!requiresConnectionActive()) {
-      logOutput.info("schedule retry cancelled")
+      logOutput.info("schedule retry cancelled, channel active: $isChannelActive, messages: ${messages.size}")
       return
     }
     val duration = retryManager.nextInterval() ?: return
@@ -337,14 +338,11 @@ open class MessageChannel(
   }
 
   private fun requiresConnectionActive(): Boolean {
-    if (!isChannelActive) {
-      return false
+    return when {
+      !isChannelActive -> false
+      alwaysRequiresConnectionActive || messages.isNotEmpty() -> true
+      else -> listeners.any { it.requiresConnectionActive() }
     }
-    if (messages.isNotEmpty()) {
-      return true
-    }
-
-    return listeners.any { it.requiresConnectionActive() }
   }
 
   /* -- retry :end -- */
@@ -451,7 +449,7 @@ open class MessageChannel(
     fun write(message: Any) {
       try {
         if (!onWriteMessage(message)) {
-          logOutput?.trace("send message cancelled: $message")
+          logOutput?.debug("send message cancelled: $message")
         } else {
           logOutput?.trace("send message: $message")
         }

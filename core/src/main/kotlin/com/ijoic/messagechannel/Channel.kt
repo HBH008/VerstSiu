@@ -63,6 +63,10 @@ abstract class Channel(name: String) {
       logger.trace("[$tag] $message")
     }
 
+    override fun debug(message: String) {
+      logger.debug("[$tag] $message")
+    }
+
     override fun info(message: String) {
       logger.info("[$tag] $message")
     }
