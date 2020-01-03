@@ -31,12 +31,14 @@ import java.util.concurrent.atomic.AtomicInteger
 class SubscribeInput<DATA: Any>(
   private val mapSubscribe: (Operation, DATA) -> Any,
   private val mapSubscribeMerge: ((Operation, Collection<DATA>) -> Any)? = null,
+  private val mapSubscribeMergeAsMultiple: ((Operation, Collection<DATA>) -> Collection<Any>)? = null,
   private val mergeGroupSize: Int = 0,
   private val refreshMode: RefreshMode = RefreshMode.REPEAT,
   retryOnFailureDuration: Duration? = null
 ) : ChannelInput() {
 
   private val editId = AtomicInteger()
+  private val mergeActive = (mapSubscribeMerge != null || mapSubscribeMergeAsMultiple != null) && mergeGroupSize > 1
 
   /**
    * Add [subscribe]
@@ -123,9 +125,15 @@ class SubscribeInput<DATA: Any>(
       return
     }
 
-    if (mapSubscribeMerge != null && mergeGroupSize > 1) {
-      messages.chunked(mergeGroupSize).forEach {
-        writer.write(mapSubscribeMerge.invoke(operation, it))
+    if (mergeActive) {
+      messages.chunked(mergeGroupSize).forEach { data ->
+        when {
+          mapSubscribeMerge != null -> writer.write(mapSubscribeMerge.invoke(operation, data))
+          mapSubscribeMergeAsMultiple != null -> {
+            val subscriptions = mapSubscribeMergeAsMultiple.invoke(operation, data)
+            subscriptions.forEach { writer.write(it) }
+          }
+        }
       }
 
     } else {
