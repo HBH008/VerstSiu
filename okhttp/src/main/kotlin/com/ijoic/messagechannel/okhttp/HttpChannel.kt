@@ -24,6 +24,7 @@ import okhttp3.Response
 import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.Proxy
+import javax.net.ssl.HostnameVerifier
 
 /**
  * Http channel
@@ -42,6 +43,12 @@ class HttpChannel(options: Options) : RequestChannel(options.url) {
 
       if (!host.isNullOrBlank() && port != null) {
         proxy(Proxy(Proxy.Type.HTTP, InetSocketAddress(host, port)))
+      }
+
+      if (options.ignoreHostnameVerify) {
+        hostnameVerifier(
+          HostnameVerifier { _, _ -> true }
+        )
       }
     }
     .build()
@@ -74,7 +81,8 @@ class HttpChannel(options: Options) : RequestChannel(options.url) {
     val url: String,
     val proxyHost: String? = null,
     val proxyPort: Int? = null,
-    val decodeResponse: ((Response) -> Any?)? = null
+    val decodeResponse: ((Response) -> Any?)? = null,
+    val ignoreHostnameVerify: Boolean = false
   )
 
 }
