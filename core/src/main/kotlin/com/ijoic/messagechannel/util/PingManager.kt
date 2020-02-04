@@ -93,17 +93,28 @@ internal class PingManager(
     if (!options.enabled || !isConnectionActive) {
       return
     }
-    lastReceivedTime = getCurrTime()
 
     if (isPongMessage) {
       lastPing = 0L
       pongTimeoutTask?.checkAndCancel()
       pongTimeoutTask = null
+    } else {
+      lastReceivedTime = getCurrTime()
     }
     if (pingIntervalMs == null) {
       schedulePingLazy()
     }
     scheduleCheckReceiveTimeout()
+  }
+
+  /**
+   * Check pong [message]
+   */
+  fun checkPingMessage(message: Any): Boolean {
+    if (!options.enabled) {
+      return false
+    }
+    return options.pingMessage == message || options.isPingMessage?.invoke(message) == true
   }
 
   /**

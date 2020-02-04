@@ -36,7 +36,8 @@ open class MessageChannel(
   name: String,
   private val handler: PrepareHandler,
   pingOptions: PingOptions? = null,
-  retryOptions: RetryOptions? = null): Channel(name) {
+  retryOptions: RetryOptions? = null
+): Channel(name) {
 
   /**
    * Open callback
@@ -77,13 +78,22 @@ open class MessageChannel(
     }
 
     override fun onMessageReceived(receiveTime: Long, message: Any) {
-      val isPongMessage = pingManager.checkPongMessage(message)
-      pingManager.onReceivedMessage(isPongMessage)
+      when {
+        pingManager.checkPongMessage(message) -> {
+          pingManager.onReceivedMessage(isPongMessage = true)
+          logOutput.trace("receive pong message: $message")
+        }
+        pingManager.checkPingMessage(message) -> {
+          val pongMessage = pingOptions?.pongMessage ?: pingOptions?.genPongMessage?.invoke(message)
 
-      if (!isPongMessage) {
-        onMessage?.invoke(receiveTime, message)
-      } else {
-        logOutput.trace("receive pong message: $message")
+          if (pongMessage != null) {
+            notifyPingRequired(pongMessage)
+          }
+        }
+        else -> {
+          pingManager.onReceivedMessage(isPongMessage = false)
+          onMessage?.invoke(receiveTime, message)
+        }
       }
     }
   }

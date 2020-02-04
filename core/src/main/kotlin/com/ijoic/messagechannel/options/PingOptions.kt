@@ -29,6 +29,8 @@ data class PingOptions(
   val pingMessage: Any? = null,
   val pongMessage: Any? = null,
   val genPingMessage: (() -> Any)? = null,
+  val genPongMessage: ((Any) -> Any)? = null,
+  val isPingMessage: ((Any) -> Boolean)? = null,
   val isPongMessage: ((Any) -> Boolean)? = null,
   val pingInterval: Duration? = null,
   val pingAfterNoMessageReceived: Duration? = null,
