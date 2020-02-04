@@ -110,16 +110,6 @@ internal class PingManager(
   /**
    * Check pong [message]
    */
-  fun checkPingMessage(message: Any): Boolean {
-    if (!options.enabled) {
-      return false
-    }
-    return options.pingMessage == message || options.isPingMessage?.invoke(message) == true
-  }
-
-  /**
-   * Check pong [message]
-   */
   fun checkPongMessage(message: Any): Boolean {
     if (!options.enabled) {
       return false
