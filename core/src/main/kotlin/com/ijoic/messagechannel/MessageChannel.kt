@@ -78,19 +78,15 @@ open class MessageChannel(
     }
 
     override fun onMessageReceived(receiveTime: Long, message: Any) {
-      when {
-        pingManager.checkPongMessage(message) -> {
-          pingManager.onReceivedMessage(isPongMessage = true)
-          logOutput.trace("receive pong message: $message")
-        }
-        pingManager.checkPingMessage(message) -> {
-          val pongMessage = pingOptions?.pongMessage ?: pingOptions?.genPongMessage?.invoke(message)
+      if (pingManager.checkPongMessage(message)) {
+        pingManager.onReceivedMessage(isPongMessage = true)
+        logOutput.trace("receive pong message: $message")
+      } else {
+        val pongMessage = pingOptions?.mapPongMessage?.invoke(message)
 
-          if (pongMessage != null) {
-            notifyPingRequired(pongMessage)
-          }
-        }
-        else -> {
+        if (pongMessage != null) {
+          notifyPingRequired(pongMessage)
+        } else {
           pingManager.onReceivedMessage(isPongMessage = false)
           onMessage?.invoke(receiveTime, message)
         }
