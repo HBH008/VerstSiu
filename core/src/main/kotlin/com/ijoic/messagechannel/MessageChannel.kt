@@ -17,11 +17,11 @@
  */
 package com.ijoic.messagechannel
 
-import com.ijoic.messagechannel.options.PingOptions
-import com.ijoic.messagechannel.options.RetryOptions
+import com.ijoic.channel.base.options.PingOptions
+import com.ijoic.channel.base.options.RetryOptions
 import com.ijoic.messagechannel.output.LogOutput
-import com.ijoic.messagechannel.util.PingManager
-import com.ijoic.messagechannel.util.RetryManager
+import com.ijoic.channel.base.PingManager
+import com.ijoic.channel.base.RetryManager
 import com.ijoic.messagechannel.util.TaskQueue
 import com.ijoic.messagechannel.util.checkAndCancel
 import java.util.concurrent.Executors

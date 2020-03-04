@@ -15,9 +15,9 @@
  *  limitations under the License.
  *
  */
-package com.ijoic.messagechannel.util
+package com.ijoic.channel.base
 
-import com.ijoic.messagechannel.options.RetryOptions
+import com.ijoic.channel.base.options.RetryOptions
 import java.time.Duration
 
 /**

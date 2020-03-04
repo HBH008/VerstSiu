@@ -15,24 +15,27 @@
  *  limitations under the License.
  *
  */
-package com.ijoic.messagechannel.options
+package com.ijoic.channel.base.options
 
 import java.time.Duration
 
 /**
- * Ping options
+ * Retry options
  *
- * @author verstsiu created at 2019-10-11 15:25
+ * @author verstsiu created at 2019-10-11 14:20
  */
-data class PingOptions(
+data class RetryOptions(
   val enabled: Boolean = true,
-  val pingMessage: Any? = null,
-  val pongMessage: Any? = null,
-  val genPingMessage: (() -> Any)? = null,
-  val mapPongMessage: ((Any) -> Any?)? = null,
-  val isPongMessage: ((Any) -> Boolean)? = null,
-  val pingInterval: Duration? = null,
-  val pingAfterNoMessageReceived: Duration? = null,
-  val messageReceivedTimeout: Duration? = null,
-  val pongReceivedTimeout: Duration? = null
+  val retryAlways: Boolean = true,
+  val maxRetrySize: Int = 0,
+  val intervals: List<Duration> = listOf(
+    Duration.ZERO,
+    Duration.ofSeconds(1),
+    Duration.ofSeconds(2),
+    Duration.ofSeconds(5),
+    Duration.ofSeconds(10),
+    Duration.ofSeconds(30),
+    Duration.ofMinutes(1)
+  ),
+  val ignoreMessageSize: Boolean = false
 )

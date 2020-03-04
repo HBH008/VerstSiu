@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright(c) 2019 VerstSiu
+ *  Copyright(c) 2020 VerstSiu
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -15,27 +15,21 @@
  *  limitations under the License.
  *
  */
-package com.ijoic.messagechannel.options
-
-import java.time.Duration
+package com.ijoic.channel.subscribe
 
 /**
- * Retry options
+ * Channel writer
  *
- * @author verstsiu created at 2019-10-11 14:20
+ * @author verstsiu created at 2020-02-28 11:08
  */
-data class RetryOptions(
-  val enabled: Boolean = true,
-  val retryAlways: Boolean = true,
-  val maxRetrySize: Int = 0,
-  val intervals: List<Duration> = listOf(
-    Duration.ZERO,
-    Duration.ofSeconds(1),
-    Duration.ofSeconds(2),
-    Duration.ofSeconds(5),
-    Duration.ofSeconds(10),
-    Duration.ofSeconds(30),
-    Duration.ofMinutes(1)
-  ),
-  val ignoreMessageSize: Boolean = false
-)
+interface ChannelWriter {
+  /**
+   * Write [message]
+   */
+  fun write(message: Any)
+
+  /**
+   * Close writer
+   */
+  fun close()
+}

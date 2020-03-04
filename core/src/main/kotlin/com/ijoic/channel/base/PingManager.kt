@@ -15,9 +15,10 @@
  *  limitations under the License.
  *
  */
-package com.ijoic.messagechannel.util
+package com.ijoic.channel.base
 
-import com.ijoic.messagechannel.options.PingOptions
+import com.ijoic.channel.base.options.PingOptions
+import com.ijoic.messagechannel.util.checkAndCancel
 import java.time.Duration
 import java.util.concurrent.Future
 import java.util.concurrent.ScheduledExecutorService

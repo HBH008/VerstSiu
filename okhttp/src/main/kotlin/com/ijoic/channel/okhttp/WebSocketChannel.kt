@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright(c) 2019 VerstSiu
+ *  Copyright(c) 2020 VerstSiu
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -15,9 +15,11 @@
  *  limitations under the License.
  *
  */
-package com.ijoic.messagechannel.okhttp
+package com.ijoic.channel.okhttp
 
-import com.ijoic.messagechannel.MessageChannel
+import com.ijoic.channel.subscribe.ChannelWriter
+import com.ijoic.channel.subscribe.ConnectionHandler
+import com.ijoic.channel.subscribe.SubscribeChannel
 import com.ijoic.channel.base.options.PingOptions
 import com.ijoic.channel.base.options.RetryOptions
 import okhttp3.*
@@ -29,42 +31,42 @@ import java.net.Proxy
 /**
  * WebSocket channel
  *
- * @author verstsiu created at 2019-10-08 11:02
+ * @author verstsiu created at 2020-02-28 10:10
  */
-class WebSocketChannel(options: Options) : MessageChannel(
-  options.url,
-  WebSocketHandler(options),
-  options.pingOptions,
-  options.retryOptions
-) {
-
-  constructor(url: String): this(Options(url))
+class WebSocketChannel(
+  url: String,
+  prepareIntervalMs: Long = 1000L
+) : SubscribeChannel(url, prepareIntervalMs, WebSocketHandler(Options(url))) {
 
   /**
    * WebSocket writer
    */
-  private class WebSocketWriter(socket: WebSocket) : ChannelWriter() {
+  private class WebSocketWriter(socket: WebSocket) : ChannelWriter {
     private var refSocket: WeakReference<WebSocket>? = WeakReference(socket)
 
-    override fun onWriteMessage(message: Any): Boolean {
-      val socket = refSocket?.get() ?: return false
+    override fun write(message: Any) {
+      val socket = refSocket?.get() ?: return
 
       when (message) {
         is String -> socket.send(message)
         is ByteString -> socket.send(message)
         else -> throw IllegalArgumentException("invalid message type: ${message.javaClass.canonicalName}")
       }
-      return true
     }
 
-    override fun onClose() {
+    override fun close() {
       val socket = refSocket?.get() ?: return
       refSocket = null
-      socket.close(1000, "client close connection")
+
+      try {
+        socket.close(1000, "client close connection")
+      } catch (e: Exception) {
+        e.printStackTrace()
+      }
     }
   }
 
-  private class WebSocketHandler(options: Options) : PrepareHandler() {
+  private class WebSocketHandler(options: Options) : ConnectionHandler {
 
     private val request = Request.Builder()
       .url(options.url)
@@ -83,25 +85,21 @@ class WebSocketChannel(options: Options) : MessageChannel(
 
     private val decodeBytes: ((ByteArray) -> String?)? = options.decodeBytes
 
-    override fun onPrepareConnection(listener: StateListener) {
+    override fun prepareConnection(listener: ConnectionHandler.StateListener) {
       client.newWebSocket(request, object : WebSocketListener() {
         override fun onOpen(webSocket: WebSocket, response: Response) {
-          logOutput?.info("connection open")
           listener.onConnectionComplete(WebSocketWriter(webSocket))
         }
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-          logOutput?.error("connection failure: ${response?.code}", t)
           listener.onConnectionFailure(t)
         }
 
         override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-          logOutput?.info("connection closing: $code - $reason")
           webSocket.close(code, reason)
         }
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-          logOutput?.info("connection closed: $code - $reason")
           listener.onConnectionClosed()
         }
 
@@ -129,11 +127,11 @@ class WebSocketChannel(options: Options) : MessageChannel(
    */
   data class Options(
     val url: String,
+    val prepareIntervalMs: Long = 1000L,
     val proxyHost: String? = null,
     val proxyPort: Int? = null,
     val pingOptions: PingOptions? = null,
     val retryOptions: RetryOptions? = null,
     val decodeBytes: ((ByteArray) -> String?)? = null
   )
-
 }
