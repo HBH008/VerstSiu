@@ -24,7 +24,8 @@ fun main() {
   channel.onOpen = { println("connection opened") }
   channel.onMessage = { _, message -> println(message) }
   channel.onClosed = { println("connection closed") }
+  channel.prepare()
   channel.send("hello world!")
-  Thread.sleep(2000)
+  Thread.sleep(20000)
   channel.close()
 }

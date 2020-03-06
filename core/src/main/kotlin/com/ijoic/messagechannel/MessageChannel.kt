@@ -17,15 +17,10 @@
  */
 package com.ijoic.messagechannel
 
+import com.ijoic.channel.message.ChannelSession
 import com.ijoic.messagechannel.options.PingOptions
 import com.ijoic.messagechannel.options.RetryOptions
 import com.ijoic.messagechannel.output.LogOutput
-import com.ijoic.messagechannel.util.PingManager
-import com.ijoic.messagechannel.util.RetryManager
-import com.ijoic.messagechannel.util.TaskQueue
-import com.ijoic.messagechannel.util.checkAndCancel
-import java.util.concurrent.Executors
-import java.util.concurrent.Future
 
 /**
  * Message channel
@@ -35,8 +30,8 @@ import java.util.concurrent.Future
 open class MessageChannel(
   name: String,
   private val handler: PrepareHandler,
-  pingOptions: PingOptions? = null,
-  retryOptions: RetryOptions? = null
+  private val pingOptions: PingOptions? = null,
+  private val retryOptions: RetryOptions? = null
 ): Channel(name) {
 
   /**
@@ -49,308 +44,64 @@ open class MessageChannel(
    */
   var onClosed: (() -> Unit)? = null
 
-  private var isChannelActive = true
-  private var isChannelPrepare = false
-  private var isChannelReady = false
-  private var isRefreshPrepare = false
-
-  private val executor = Executors.newScheduledThreadPool(1)
-  private val pingManager = PingManager(
-    executor,
-    pingOptions ?: PingOptions(enabled = false),
-    { notifyPingRequired(it) },
-    { notifyRestartConnection() }
-  )
-
-  private val stateListener = object : StateListener {
-    override fun onConnectionComplete(writer: ChannelWriter) {
-      writer.logOutput = logOutput
-      writer.onError = onError
-      taskQueue.execute(ConnectionComplete(writer))
-    }
-
-    override fun onConnectionFailure(t: Throwable) {
-      taskQueue.execute(ConnectionFailure(t))
-    }
-
-    override fun onConnectionClosed() {
-      taskQueue.execute(CLOSE_COMPLETE)
-    }
-
-    override fun onMessageReceived(receiveTime: Long, message: Any) {
-      if (pingManager.checkPongMessage(message)) {
-        pingManager.onReceivedMessage(isPongMessage = true)
-        logOutput.trace("receive pong message: $message")
-      } else {
-        val pongMessage = pingOptions?.mapPongMessage?.invoke(message)
-
-        if (pongMessage != null) {
-          notifyPingRequired(pongMessage)
-        } else {
-          pingManager.onReceivedMessage(isPongMessage = false)
-          onMessage?.invoke(receiveTime, message)
-        }
-      }
-    }
-  }
-
-  init {
-    handler.logOutput = logOutput
-  }
-
   override fun prepare() {
     logOutput.info("channel prepare")
-    isChannelActive = true
-    taskQueue.execute(RESET_PREPARE)
+    prepareSession()
   }
 
   /**
    * Send [message]
    */
   fun send(message: Any) {
-    taskQueue.execute(SendMessage(message))
+    val session = getActiveSession() ?: return
+    session.send(message)
   }
 
   override fun refresh() {
     logOutput.info("channel refresh")
-    notifyRestartConnection()
+    val session = getActiveSession() ?: return
+    session.refresh()
   }
 
   override fun close() {
     logOutput.info("channel closed")
-    isChannelActive = false
-    taskQueue.execute(CLOSE)
+    destroyActiveSession()
   }
 
-  /* -- task :begin -- */
+  /* -- session :begin -- */
 
-  private val taskQueue = TaskQueue(
-    executor,
-    object : TaskQueue.Handler {
-      override fun onHandleTaskMessage(message: Any) {
-        when (message) {
-          RESET_PREPARE -> if (isChannelActive && !isChannelReady && !isChannelPrepare) {
-            isChannelPrepare = true
-            onResetRetryConnection()
-            onPrepareConnection()
-          }
-          RESTART_PREPARE -> if (isChannelActive && isChannelReady) {
-            isChannelReady = false
-            isRefreshPrepare = true
-            onCloseConnection()
-          }
-          PREPARE -> {
-            if (isChannelActive && !isChannelReady && !isChannelPrepare) {
-              isChannelPrepare = true
-              onPrepareConnection()
-            } else {
-              logOutput.info("prepare cancelled: active - $isChannelActive, ready - $isChannelReady, prepare - $isChannelPrepare")
-            }
-          }
-          CLOSE -> if (!isChannelActive) {
-            onResetRetryConnection()
+  private var sessionImpl: ChannelSession? = null
+  private val sessionLock = Object()
 
-            if (isChannelReady) {
-              isChannelReady = false
-              onCloseConnection()
-            }
-          }
-          CLOSE_COMPLETE -> {
-            isChannelReady = false
-            isChannelPrepare = false
-            onClosed?.invoke()
-            pingManager.onConnectionClosed()
+  private fun prepareSession(): ChannelSession {
+    synchronized(sessionLock) {
+      var session = sessionImpl
 
-            if (isChannelActive) {
-              if (isRefreshPrepare) {
-                isRefreshPrepare = false
-                isChannelPrepare = true
-                logOutput.info("closed to refresh")
-                onPrepareConnection()
-              } else {
-                logOutput.info("closed to schedule retry")
-                onScheduleRetryConnection()
-              }
-            } else {
-              logOutput.info("closed with channel inactive")
-            }
-            listeners.forEach { it.onChannelInactive() }
-          }
-          is SendMessage -> if (isChannelActive) {
-            messages.add(message.data)
+      if (session == null || !session.isActive) {
+        session = ChannelSession(logOutput, onOpen, onClosed, onMessage, onError, handler, pingOptions, retryOptions)
+        listeners.forEach { session.addChannelListener(it) }
+        sessionImpl = session
+      }
+      return session
+    }
+  }
 
-            if (isChannelReady) {
-              val writer = activeWriter ?: return
-              sendMessagesAll(writer)
-            } else if (!isChannelPrepare) {
-              isChannelPrepare = true
-              onResetRetryConnection()
-              onPrepareConnection()
-            }
-          }
-          is PingMessage -> {
-            if (isChannelActive && isChannelReady) {
-              val writer = activeWriter ?: return
-              writer.write(message.data)
-            } else {
-              logOutput.trace("ping cancelled: ${message.data}")
-            }
-          }
-          is ConnectionComplete -> {
-            onResetRetryConnection()
-            onOpen?.invoke()
-            activeWriter = message.writer
-            isChannelReady = true
-            isChannelPrepare = false
-            isRefreshPrepare = false
-            sendMessagesAll(message.writer)
-            pingManager.onConnectionComplete()
+  private fun getActiveSession(): ChannelSession? {
+    return sessionImpl?.takeIf { it.isActive }
+  }
 
-            if (!isChannelActive) {
-              isChannelReady = false
-              onCloseConnection()
-            } else {
-              listeners.forEach { it.onChannelActive(message.writer) }
-            }
-          }
-          is ConnectionFailure -> {
-            activeWriter = null
-            isChannelReady = false
-            isChannelPrepare = false
-            isRefreshPrepare = false
-            onError?.invoke(message.error)
+  private fun destroyActiveSession() {
+    synchronized(sessionLock) {
+      val session = sessionImpl ?: return
+      sessionImpl = null
 
-            if (isChannelActive) {
-              pingManager.onConnectionFailure()
-              onScheduleRetryConnection()
-            } else {
-              logOutput.info("retry cancelled: channel inactive")
-            }
-            listeners.forEach { it.onChannelInactive() }
-          }
-          is AddListener -> {
-            val changed = listeners.add(message.data)
-
-            if (changed) {
-              message.data.bind(logOutput)
-
-              if (isChannelActive && isChannelReady) {
-                val writer = activeWriter ?: return
-                message.data.onChannelActive(writer)
-              }
-            }
-          }
-          is RemoveListener -> {
-            val changed = listeners.remove(message.data)
-
-            if (changed) {
-              message.data.onChannelInactive()
-            }
-          }
-        }
+      if (session.isActive) {
+        session.destroy()
       }
     }
-  )
-
-  private val messages = mutableListOf<Any>()
-  private var activeWriter: ChannelWriter? = null
-
-  /**
-   * Prepare connection
-   */
-  private fun onPrepareConnection() {
-    handler.onPrepareConnection(stateListener)
   }
 
-  /**
-   * Close connection
-   */
-  private fun onCloseConnection() {
-    val writer = activeWriter ?: return
-    activeWriter = null
-
-    try {
-      writer.close()
-    } catch (e: Exception) {
-      onError?.invoke(e)
-    }
-  }
-
-  private fun notifyPingRequired(message: Any) {
-    taskQueue.execute(PingMessage(message))
-  }
-
-  private fun notifyRestartConnection() {
-    taskQueue.execute(RESTART_PREPARE)
-  }
-
-  /**
-   * Send message
-   */
-  private data class SendMessage(
-    val data: Any
-  )
-
-  /**
-   * Ping message
-   */
-  private data class PingMessage(
-    val data: Any
-  )
-
-  /**
-   * Connection complete
-   */
-  private data class ConnectionComplete(
-    val writer: ChannelWriter
-  )
-
-  /**
-   * Connection failure
-   */
-  private data class ConnectionFailure(
-    val error: Throwable
-  )
-
-  /* -- task :end -- */
-
-  /* -- retry :begin -- */
-
-  private val retryManager = RetryManager(retryOptions ?: RetryOptions())
-  private var retryTask: Future<*>? = null
-
-  private fun onScheduleRetryConnection() {
-    clearRetryTask()
-
-    if (!requiresConnectionActive()) {
-      logOutput.info("schedule retry cancelled, channel active: $isChannelActive, messages: ${messages.size}")
-      return
-    }
-    val duration = retryManager.nextInterval() ?: return
-    retryTask = taskQueue.schedule(PREPARE, duration.toMillis())
-    logOutput.info("schedule retry prepare: ${duration.toMillis()} ms")
-  }
-
-  private fun onResetRetryConnection() {
-    clearRetryTask()
-    retryManager.reset()
-  }
-
-  private fun clearRetryTask() {
-    val task = retryTask ?: return
-    retryTask = null
-    task.checkAndCancel()
-  }
-
-  private fun requiresConnectionActive(): Boolean {
-    return when {
-      !isChannelActive -> false
-      retryManager.ignoreMessageSize || messages.isNotEmpty() -> true
-      else -> listeners.any { it.requiresConnectionActive() }
-    }
-  }
-
-  /* -- retry :end -- */
+  /* -- session :end -- */
 
   /* -- event :begin -- */
 
@@ -360,14 +111,20 @@ open class MessageChannel(
    * Add channel [listener]
    */
   fun addChannelListener(listener: ChannelListener) {
-    taskQueue.execute(AddListener(listener))
+    listeners.add(listener)
+
+    val session = getActiveSession() ?: return
+    session.addChannelListener(listener)
   }
 
   /**
    * Remove channel [listener]
    */
   fun removeChannelListener(listener: ChannelListener) {
-    taskQueue.execute(RemoveListener(listener))
+    listeners.remove(listener)
+
+    val session = getActiveSession() ?: return
+    session.removeChannelListener(listener)
   }
 
   /**
@@ -395,31 +152,7 @@ open class MessageChannel(
     fun requiresConnectionActive() = false
   }
 
-  /**
-   * Add listener
-   */
-  private data class AddListener(
-    val data: ChannelListener
-  )
-
-  /**
-   * Remove listener
-   */
-  private data class RemoveListener(
-    val data: ChannelListener
-  )
-
   /* -- event :end -- */
-
-  private fun sendMessagesAll(writer: ChannelWriter) {
-    if (messages.isEmpty()) {
-      return
-    }
-    messages.forEach {
-      writer.write(it)
-    }
-    messages.clear()
-  }
 
   /**
    * Prepare handler
@@ -508,11 +241,4 @@ open class MessageChannel(
     fun onMessageReceived(receiveTime: Long, message: Any)
   }
 
-  companion object {
-    private const val RESET_PREPARE = "reset_prepare"
-    private const val RESTART_PREPARE = "restart_prepare"
-    private const val PREPARE = "prepare"
-    private const val CLOSE = "close"
-    private const val CLOSE_COMPLETE = "close_complete"
-  }
 }
