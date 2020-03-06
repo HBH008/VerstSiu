@@ -17,7 +17,8 @@
  */
 package com.ijoic.channel.message
 
-import com.ijoic.channel.base.util.ChannelExecutors
+import com.ijoic.channel.base.executor.ScheduledExecutorPool
+import com.ijoic.channel.base.executor.SingleThreadExecutorPool
 import com.ijoic.channel.base.util.MessageQueue
 import com.ijoic.messagechannel.MessageChannel
 import com.ijoic.messagechannel.options.PingOptions
@@ -55,7 +56,7 @@ internal class ChannelSession(
   private var isChannelReady = false
   private var isRefreshPrepare = false
 
-  private val scheduledExecutor = ChannelExecutors.sharedScheduledExecutor
+  private val scheduledExecutor = ScheduledExecutorPool.obtain(this)
   private val pingManager = PingManager(
     scheduledExecutor,
     pingOptions ?: PingOptions(enabled = false),
@@ -110,12 +111,14 @@ internal class ChannelSession(
     isActive = false
     messageQueue.submit(CLOSE)
     messageQueue.destroy()
+    SingleThreadExecutorPool.release(this)
+    ScheduledExecutorPool.release(this)
   }
 
   /* -- task :begin -- */
 
   private val messageQueue = MessageQueue(
-    ChannelExecutors.getSharedSingleThreadExecutor(),
+    SingleThreadExecutorPool.obtain(this),
     this::dispatchMessage
   )
 
