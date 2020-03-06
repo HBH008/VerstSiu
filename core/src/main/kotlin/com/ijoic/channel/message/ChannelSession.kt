@@ -52,8 +52,7 @@ internal class ChannelSession(
   var isActive = true
     private set
 
-  private var isChannelPrepare = false
-  private var isChannelReady = false
+  private var state: ChannelState = ChannelState.CLOSED
   private var isRefreshPrepare = false
 
   private val scheduledExecutor = ScheduledExecutorPool.obtain(this)
@@ -132,42 +131,71 @@ internal class ChannelSession(
 
   private fun dispatchMessage(message: Any) {
     when (message) {
-      RESET_PREPARE -> if (isActive && !isChannelReady && !isChannelPrepare) {
-        isChannelPrepare = true
-        onResetRetryConnection()
-        onPrepareConnection()
-      }
-      RESTART_PREPARE -> if (isActive && isChannelReady) {
-        isChannelReady = false
-        isRefreshPrepare = true
-        onCloseConnection()
-      }
-      PREPARE -> {
-        if (isActive && !isChannelReady && !isChannelPrepare) {
-          isChannelPrepare = true
-          onPrepareConnection()
+      RESTART_PREPARE -> {
+        if (!isActive) {
+          checkAndCloseConnection()
         } else {
-          logOutput.info("prepare cancelled: active - $isActive, ready - $isChannelReady, prepare - $isChannelPrepare")
+          when(state) {
+            ChannelState.CLOSED -> {
+              state = ChannelState.PREPARE
+              onPrepareConnection()
+            }
+            ChannelState.PREPARE,
+            ChannelState.CLOSING -> {
+              // do nothing
+            }
+            ChannelState.OPEN -> {
+              isRefreshPrepare = true
+              state = ChannelState.CLOSING
+              onCloseConnection()
+            }
+          }
         }
       }
-      CLOSE -> if (!isActive) {
-        onResetRetryConnection()
+      PREPARE -> {
+        if (!isActive) {
+          checkAndCloseConnection()
+        } else {
+          when(state) {
+            ChannelState.CLOSED -> {
+              isRefreshPrepare = true
+              state = ChannelState.PREPARE
+              onPrepareConnection()
+            }
+            ChannelState.PREPARE,
+            ChannelState.OPEN,
+            ChannelState.CLOSING -> {
+              // do nothing
+            }
+          }
+        }
+      }
+      CLOSE -> {
+        if (!isActive) {
+          onResetRetryConnection()
+        }
 
-        if (isChannelReady) {
-          isChannelReady = false
-          onCloseConnection()
+        when(state) {
+          ChannelState.CLOSED,
+          ChannelState.PREPARE,
+          ChannelState.CLOSING -> {
+            // do nothing
+          }
+          ChannelState.OPEN -> {
+            state = ChannelState.CLOSING
+            onCloseConnection()
+          }
         }
       }
       CLOSE_COMPLETE -> {
-        isChannelReady = false
-        isChannelPrepare = false
+        state = ChannelState.CLOSED
         onClosed?.invoke()
         pingManager.onConnectionClosed()
 
         if (isActive) {
           if (isRefreshPrepare) {
             isRefreshPrepare = false
-            isChannelPrepare = true
+            state = ChannelState.PREPARE
             logOutput.info("closed to refresh")
             onPrepareConnection()
           } else {
@@ -182,17 +210,24 @@ internal class ChannelSession(
       is SendMessage -> if (isActive) {
         messages.add(message.data)
 
-        if (isChannelReady) {
-          val writer = activeWriter ?: return
-          sendMessagesAll(writer)
-        } else if (!isChannelPrepare) {
-          isChannelPrepare = true
-          onResetRetryConnection()
-          onPrepareConnection()
+        when(state) {
+          ChannelState.CLOSED -> {
+            state = ChannelState.PREPARE
+            onResetRetryConnection()
+            onPrepareConnection()
+          }
+          ChannelState.PREPARE,
+          ChannelState.CLOSING -> {
+            // do nothing
+          }
+          ChannelState.OPEN -> {
+            val writer = activeWriter ?: return
+            sendMessagesAll(writer)
+          }
         }
       }
       is PingMessage -> {
-        if (isActive && isChannelReady) {
+        if (isActive && state == ChannelState.OPEN) {
           val writer = activeWriter ?: return
           writer.write(message.data)
         } else {
@@ -203,14 +238,13 @@ internal class ChannelSession(
         onResetRetryConnection()
         onOpen?.invoke()
         activeWriter = message.writer
-        isChannelReady = true
-        isChannelPrepare = false
+        state = ChannelState.OPEN
         isRefreshPrepare = false
         sendMessagesAll(message.writer)
         pingManager.onConnectionComplete()
 
         if (!isActive) {
-          isChannelReady = false
+          state = ChannelState.CLOSING
           onCloseConnection()
         } else {
           listeners.forEach { it.onChannelActive(message.writer) }
@@ -218,8 +252,7 @@ internal class ChannelSession(
       }
       is ConnectionFailure -> {
         activeWriter = null
-        isChannelReady = false
-        isChannelPrepare = false
+        state = ChannelState.CLOSED
         isRefreshPrepare = false
         onError?.invoke(message.error)
 
@@ -237,7 +270,7 @@ internal class ChannelSession(
         if (changed) {
           message.data.bind(logOutput)
 
-          if (isActive && isChannelReady) {
+          if (isActive && state == ChannelState.OPEN) {
             val writer = activeWriter ?: return
             message.data.onChannelActive(writer)
           }
@@ -248,6 +281,26 @@ internal class ChannelSession(
 
         if (changed) {
           message.data.onChannelInactive()
+        }
+      }
+    }
+  }
+
+  private fun checkAndCloseConnection() {
+    when(state) {
+      ChannelState.CLOSED,
+      ChannelState.PREPARE,
+      ChannelState.CLOSING -> {
+        // do nothing
+      }
+      ChannelState.OPEN -> {
+        val writer = activeWriter
+
+        if (writer == null) {
+          state = ChannelState.CLOSED
+        } else {
+          state = ChannelState.CLOSING
+          writer.close()
         }
       }
     }
@@ -399,7 +452,6 @@ internal class ChannelSession(
   }
 
   companion object {
-    private const val RESET_PREPARE = "reset_prepare"
     private const val RESTART_PREPARE = "restart_prepare"
     private const val PREPARE = "prepare"
     private const val CLOSE = "close"
