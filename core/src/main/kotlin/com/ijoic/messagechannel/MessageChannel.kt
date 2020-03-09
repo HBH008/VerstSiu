@@ -28,7 +28,8 @@ import com.ijoic.messagechannel.output.LogOutput
  * @author verstsiu created at 2019-10-10 11:23
  */
 open class MessageChannel(
-  name: String,
+  private val name: String,
+  private val prepareMs: Long,
   private val handler: PrepareHandler,
   private val pingOptions: PingOptions? = null,
   private val retryOptions: RetryOptions? = null
@@ -78,7 +79,7 @@ open class MessageChannel(
       var session = sessionImpl
 
       if (session == null || !session.isActive) {
-        session = ChannelSession(logOutput, onOpen, onClosed, onMessage, onError, handler, pingOptions, retryOptions)
+        session = ChannelSession(logOutput, onOpen, onClosed, onMessage, onError, handler, name, prepareMs, pingOptions, retryOptions)
         listeners.forEach { session.addChannelListener(it) }
         sessionImpl = session
       }

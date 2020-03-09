@@ -2,7 +2,7 @@ plugins {
     id 'java'
     id 'org.jetbrains.kotlin.jvm' version '1.3.60'
 }
-//apply from: "https://raw.githubusercontent.com/VerstSiu/gradle-common/master/java/jar-module-export-6.0.gradle"
+//apply from: "../jar-export.gradle"
 
 version '1.0-SNAPSHOT'
 

@@ -23,6 +23,7 @@ package com.ijoic.channel.message
  * @author verstsiu created at 2020-03-06 17:32
  */
 internal enum class ChannelState {
+  WAIT_PREPARE,
   PREPARE,
   OPEN,
   CLOSING,

@@ -1,0 +1,20 @@
+
+task clearBuildJarFiles(type: Delete) {
+    delete fileTree("$buildDir/libs") {
+        include '*.jar'
+    }
+}
+
+task packageSources(type: Jar, dependsOn: 'classes') {
+    from sourceSets.main.allSource
+    classifier = 'sources'
+    archivesBaseName = "$project.group-$project.name"
+}
+
+jar {
+    archivesBaseName = "$project.group-$project.name"
+}
+
+task release {
+    dependsOn clearBuildJarFiles, jar, packageSources
+}

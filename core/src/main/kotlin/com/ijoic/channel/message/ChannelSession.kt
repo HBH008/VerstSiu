@@ -20,6 +20,7 @@ package com.ijoic.channel.message
 import com.ijoic.channel.base.executor.ScheduledExecutorPool
 import com.ijoic.channel.base.executor.SingleThreadExecutorPool
 import com.ijoic.channel.base.util.MessageQueue
+import com.ijoic.channel.base.util.RateLimiterPool
 import com.ijoic.messagechannel.MessageChannel
 import com.ijoic.messagechannel.options.PingOptions
 import com.ijoic.messagechannel.options.RetryOptions
@@ -42,6 +43,8 @@ internal class ChannelSession(
   private val onMessage: ((Long, Any) -> Unit)? = null,
   private val onError: ((Throwable) -> Unit)? = null,
   private val handler: MessageChannel.PrepareHandler,
+  private val name: String,
+  prepareMs: Long,
   pingOptions: PingOptions? = null,
   retryOptions: RetryOptions? = null
 ) {
@@ -62,6 +65,8 @@ internal class ChannelSession(
     { notifyPingRequired(it) },
     { notifyRestartConnection() }
   )
+
+  private val limiter = RateLimiterPool.obtainRateLimiter(this, name, prepareMs)
 
   private val stateListener = object : MessageChannel.StateListener {
     override fun onConnectionComplete(writer: MessageChannel.ChannelWriter) {
@@ -112,6 +117,7 @@ internal class ChannelSession(
     messageQueue.destroy()
     SingleThreadExecutorPool.release(this)
     ScheduledExecutorPool.release(this)
+    RateLimiterPool.releaseRateLimiter(this, name)
   }
 
   /* -- task :begin -- */
@@ -126,20 +132,21 @@ internal class ChannelSession(
 
   init {
     handler.logOutput = logOutput
-    messageQueue.submit(PREPARE)
+    messageQueue.submit(WAIT_PREPARE)
   }
 
   private fun dispatchMessage(message: Any) {
     when (message) {
-      RESTART_PREPARE -> {
+      REFRESH_PREPARE -> {
         if (!isActive) {
           checkAndCloseConnection()
         } else {
           when(state) {
             ChannelState.CLOSED -> {
-              state = ChannelState.PREPARE
-              onPrepareConnection()
+              state = ChannelState.WAIT_PREPARE
+              limiter.addRequest(this, this::notifyPrepareConnection)
             }
+            ChannelState.WAIT_PREPARE,
             ChannelState.PREPARE,
             ChannelState.CLOSING -> {
               // do nothing
@@ -152,13 +159,34 @@ internal class ChannelSession(
           }
         }
       }
+      WAIT_PREPARE -> {
+        if (!isActive) {
+          checkAndCloseConnection()
+        } else {
+          when(state) {
+            ChannelState.CLOSED -> {
+              state = ChannelState.WAIT_PREPARE
+              limiter.addRequest(this, this::notifyPrepareConnection)
+            }
+            ChannelState.WAIT_PREPARE,
+            ChannelState.PREPARE,
+            ChannelState.OPEN,
+            ChannelState.CLOSING -> {
+              // do nothing
+            }
+          }
+        }
+      }
       PREPARE -> {
         if (!isActive) {
           checkAndCloseConnection()
         } else {
           when(state) {
             ChannelState.CLOSED -> {
-              isRefreshPrepare = true
+              state = ChannelState.WAIT_PREPARE
+              limiter.addRequest(this, this::notifyPrepareConnection)
+            }
+            ChannelState.WAIT_PREPARE -> {
               state = ChannelState.PREPARE
               onPrepareConnection()
             }
@@ -180,6 +208,12 @@ internal class ChannelSession(
           ChannelState.PREPARE,
           ChannelState.CLOSING -> {
             // do nothing
+          }
+          ChannelState.WAIT_PREPARE -> {
+            if (!isActive) {
+              state = ChannelState.CLOSED
+              limiter.cancelRequest(this)
+            }
           }
           ChannelState.OPEN -> {
             state = ChannelState.CLOSING
@@ -216,6 +250,7 @@ internal class ChannelSession(
             onResetRetryConnection()
             onPrepareConnection()
           }
+          ChannelState.WAIT_PREPARE,
           ChannelState.PREPARE,
           ChannelState.CLOSING -> {
             // do nothing
@@ -293,6 +328,10 @@ internal class ChannelSession(
       ChannelState.CLOSING -> {
         // do nothing
       }
+      ChannelState.WAIT_PREPARE -> {
+        state = ChannelState.CLOSED
+        limiter.cancelRequest(this)
+      }
       ChannelState.OPEN -> {
         val writer = activeWriter
 
@@ -331,12 +370,16 @@ internal class ChannelSession(
     messageQueue.submit(PingMessage(message))
   }
 
+  private fun notifyWaitPrepareConnection() {
+    messageQueue.submit(WAIT_PREPARE)
+  }
+
   private fun notifyPrepareConnection() {
     messageQueue.submit(PREPARE)
   }
 
   private fun notifyRestartConnection() {
-    messageQueue.submit(RESTART_PREPARE)
+    messageQueue.submit(REFRESH_PREPARE)
   }
 
   /**
@@ -382,7 +425,7 @@ internal class ChannelSession(
       return
     }
     val duration = retryManager.nextInterval() ?: return
-    retryTask = scheduledExecutor.schedule(this::notifyPrepareConnection, duration.toMillis(), TimeUnit.MILLISECONDS)
+    retryTask = scheduledExecutor.schedule(this::notifyWaitPrepareConnection, duration.toMillis(), TimeUnit.MILLISECONDS)
     logOutput.info("schedule retry prepare: ${duration.toMillis()} ms")
   }
 
@@ -452,7 +495,8 @@ internal class ChannelSession(
   }
 
   companion object {
-    private const val RESTART_PREPARE = "restart_prepare"
+    private const val REFRESH_PREPARE = "restart_prepare"
+    private const val WAIT_PREPARE = "wait_prepare"
     private const val PREPARE = "prepare"
     private const val CLOSE = "close"
     private const val CLOSE_COMPLETE = "close_complete"

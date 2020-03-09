@@ -33,6 +33,7 @@ import java.net.Proxy
  */
 class WebSocketChannel(options: Options) : MessageChannel(
   options.url,
+  options.prepareMs,
   WebSocketHandler(options),
   options.pingOptions,
   options.retryOptions
@@ -129,6 +130,7 @@ class WebSocketChannel(options: Options) : MessageChannel(
    */
   data class Options(
     val url: String,
+    val prepareMs: Long = 1000L,
     val proxyHost: String? = null,
     val proxyPort: Int? = null,
     val pingOptions: PingOptions? = null,
