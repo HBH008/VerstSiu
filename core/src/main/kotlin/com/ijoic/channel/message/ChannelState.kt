@@ -27,5 +27,6 @@ internal enum class ChannelState {
   PREPARE,
   OPEN,
   CLOSING,
-  CLOSED
+  CLOSED,
+  WAIT_RETRY
 }

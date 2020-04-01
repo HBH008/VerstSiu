@@ -55,9 +55,6 @@ internal class ChannelSession(
   var isActive = true
     private set
 
-  private var state: ChannelState = ChannelState.CLOSED
-  private var isRefreshPrepare = false
-
   private val scheduledExecutor = ScheduledExecutorPool.obtain(this)
   private val pingManager = PingManager(
     scheduledExecutor,
@@ -66,21 +63,169 @@ internal class ChannelSession(
     { notifyRestartConnection() }
   )
 
-  private val limiter = RateLimiterPool.obtainRateLimiter(this, name, prepareMs)
+  private var messageQueue: MessageQueue<Any>? = null
+  private val sessionHandler = SessionHandler(
+    object : SessionHandler.EventListener {
+
+      private val limiter = RateLimiterPool.obtainRateLimiter(this, name, prepareMs)
+
+      private val messages = mutableListOf<Any>()
+      private var activeWriter: MessageChannel.ChannelWriter? = null
+
+      private val retryManager = RetryManager(retryOptions ?: RetryOptions())
+      private var retryTask: Future<*>? = null
+
+      private val listeners = mutableSetOf<MessageChannel.ChannelListener>()
+
+      override fun onQueueRequestPrepare() {
+        limiter.addRequest(this, this::notifyPrepareConnection)
+      }
+
+      override fun onQueueRequestCancel() {
+        limiter.cancelRequest(this)
+      }
+
+      override fun onConnectionOpen(writer: MessageChannel.ChannelWriter) {
+        activeWriter = writer
+        onOpen?.invoke()
+        pingManager.onConnectionComplete()
+        sendMessagesAll(writer)
+        listeners.forEach { it.onChannelActive(writer) }
+      }
+
+      override fun onConnectionFailure(error: Throwable) {
+        activeWriter = null
+        onError?.invoke(error)
+        pingManager.onConnectionFailure()
+        listeners.forEach { it.onChannelInactive() }
+      }
+
+      override fun onConnectionClosed() {
+        onClosed?.invoke()
+        pingManager.onConnectionClosed()
+        listeners.forEach { it.onChannelInactive() }
+      }
+
+      override fun onChannelActive(listener: MessageChannel.ChannelListener) {
+        val writer = activeWriter ?: return
+        listener.onChannelActive(writer)
+      }
+
+      override fun onChannelInactive(listener: MessageChannel.ChannelListener) {
+        listener.onChannelInactive()
+      }
+
+      override fun onDestroy() {
+        RateLimiterPool.releaseRateLimiter(this, name)
+      }
+
+      override fun openConnection() {
+        handler.onPrepareConnection(stateListener)
+      }
+
+      override fun closeConnection(): Boolean {
+        val writer = activeWriter ?: return false
+        activeWriter = null
+
+        try {
+          writer.close()
+        } catch (e: Exception) {
+          onError?.invoke(e)
+        }
+        return true
+      }
+
+      override fun scheduleRetryConnection() {
+        cancelRetryConnection()
+
+        if (!requiresConnectionActive()) {
+          logOutput.info("schedule retry cancelled, channel active: $isActive, messages: ${messages.size}")
+          return
+        }
+        val duration = retryManager.nextInterval() ?: return
+        retryTask = scheduledExecutor.schedule(this::notifyWaitPrepareConnection, duration.toMillis(), TimeUnit.MILLISECONDS)
+        logOutput.info("schedule retry prepare: ${duration.toMillis()} ms")
+      }
+
+      private fun requiresConnectionActive(): Boolean {
+        return when {
+          !isActive -> false
+          retryManager.ignoreMessageSize || messages.isNotEmpty() -> true
+          else -> listeners.any { it.requiresConnectionActive() }
+        }
+      }
+
+      override fun cancelRetryConnection() {
+        val task = retryTask ?: return
+        retryTask = null
+        task.checkAndCancel()
+      }
+
+      override fun resetRetryConnection() {
+        cancelRetryConnection()
+        retryManager.reset()
+      }
+
+      override fun cacheMessage(message: Any) {
+        messages.add(message)
+      }
+
+      override fun writeMessage(message: Any) {
+        val writer = activeWriter ?: return
+        writer.write(message)
+      }
+
+      override fun writeAllMessages() {
+        val writer = activeWriter ?: return
+        sendMessagesAll(writer)
+      }
+
+      override fun addChannelListener(listener: MessageChannel.ChannelListener): Boolean {
+        val changed = listeners.add(listener)
+
+        if (changed) {
+          listener.bind(logOutput)
+        }
+        return changed
+      }
+
+      override fun removeChannelListener(listener: MessageChannel.ChannelListener): Boolean {
+        return listeners.remove(listener)
+      }
+
+      private fun sendMessagesAll(writer: MessageChannel.ChannelWriter) {
+        if (messages.isEmpty()) {
+          return
+        }
+        messages.forEach {
+          writer.write(it)
+        }
+        messages.clear()
+      }
+
+      private fun notifyWaitPrepareConnection() {
+        messageQueue?.submit(SessionHandler.WAIT_PREPARE)
+      }
+
+      private fun notifyPrepareConnection() {
+        messageQueue?.submit(SessionHandler.PREPARE)
+      }
+    }
+  )
 
   private val stateListener = object : MessageChannel.StateListener {
     override fun onConnectionComplete(writer: MessageChannel.ChannelWriter) {
       writer.logOutput = logOutput
       writer.onError = onError
-      messageQueue.submit(ConnectionComplete(writer))
+      messageQueue?.submit(SessionHandler.ConnectionComplete(writer))
     }
 
     override fun onConnectionFailure(t: Throwable) {
-      messageQueue.submit(ConnectionFailure(t))
+      messageQueue?.submit(SessionHandler.ConnectionFailure(t))
     }
 
     override fun onConnectionClosed() {
-      messageQueue.submit(CLOSE_COMPLETE)
+      messageQueue?.submit(SessionHandler.CLOSE_COMPLETE)
     }
 
     override fun onMessageReceived(receiveTime: Long, message: Any) {
@@ -100,11 +245,20 @@ internal class ChannelSession(
     }
   }
 
+  init {
+    handler.logOutput = logOutput
+    messageQueue = MessageQueue(
+      SingleThreadExecutorPool.obtain(this),
+      sessionHandler
+    )
+    messageQueue?.submit(SessionHandler.WAIT_PREPARE)
+  }
+
   /**
    * Send [message]
    */
   fun send(message: Any) {
-    messageQueue.submit(SendMessage(message))
+    messageQueue?.submit(SessionHandler.SendMessage(message))
   }
 
   fun refresh() {
@@ -113,393 +267,33 @@ internal class ChannelSession(
 
   fun destroy() {
     isActive = false
-    messageQueue.submit(CLOSE)
-    messageQueue.destroy()
+    sessionHandler.destroy()
+    messageQueue?.submit(SessionHandler.CLOSE)
+    messageQueue?.destroy()
     SingleThreadExecutorPool.release(this)
     ScheduledExecutorPool.release(this)
-    RateLimiterPool.releaseRateLimiter(this, name)
-  }
-
-  /* -- task :begin -- */
-
-  private val messageQueue = MessageQueue(
-    SingleThreadExecutorPool.obtain(this),
-    this::dispatchMessage
-  )
-
-  private val messages = mutableListOf<Any>()
-  private var activeWriter: MessageChannel.ChannelWriter? = null
-
-  init {
-    handler.logOutput = logOutput
-    messageQueue.submit(WAIT_PREPARE)
-  }
-
-  private fun dispatchMessage(message: Any) {
-    when (message) {
-      REFRESH_PREPARE -> {
-        if (!isActive) {
-          checkAndCloseConnection()
-        } else {
-          when(state) {
-            ChannelState.CLOSED -> {
-              state = ChannelState.WAIT_PREPARE
-              limiter.addRequest(this, this::notifyPrepareConnection)
-            }
-            ChannelState.WAIT_PREPARE,
-            ChannelState.PREPARE,
-            ChannelState.CLOSING -> {
-              // do nothing
-            }
-            ChannelState.OPEN -> {
-              isRefreshPrepare = true
-              state = ChannelState.CLOSING
-              onCloseConnection()
-            }
-          }
-        }
-      }
-      WAIT_PREPARE -> {
-        if (!isActive) {
-          checkAndCloseConnection()
-        } else {
-          when(state) {
-            ChannelState.CLOSED -> {
-              state = ChannelState.WAIT_PREPARE
-              limiter.addRequest(this, this::notifyPrepareConnection)
-            }
-            ChannelState.WAIT_PREPARE,
-            ChannelState.PREPARE,
-            ChannelState.OPEN,
-            ChannelState.CLOSING -> {
-              // do nothing
-            }
-          }
-        }
-      }
-      PREPARE -> {
-        if (!isActive) {
-          checkAndCloseConnection()
-        } else {
-          when(state) {
-            ChannelState.CLOSED -> {
-              state = ChannelState.WAIT_PREPARE
-              limiter.addRequest(this, this::notifyPrepareConnection)
-            }
-            ChannelState.WAIT_PREPARE -> {
-              state = ChannelState.PREPARE
-              onPrepareConnection()
-            }
-            ChannelState.PREPARE,
-            ChannelState.OPEN,
-            ChannelState.CLOSING -> {
-              // do nothing
-            }
-          }
-        }
-      }
-      CLOSE -> {
-        if (!isActive) {
-          onResetRetryConnection()
-        }
-
-        when(state) {
-          ChannelState.CLOSED,
-          ChannelState.PREPARE,
-          ChannelState.CLOSING -> {
-            // do nothing
-          }
-          ChannelState.WAIT_PREPARE -> {
-            if (!isActive) {
-              state = ChannelState.CLOSED
-              limiter.cancelRequest(this)
-            }
-          }
-          ChannelState.OPEN -> {
-            state = ChannelState.CLOSING
-            onCloseConnection()
-          }
-        }
-      }
-      CLOSE_COMPLETE -> {
-        state = ChannelState.CLOSED
-        onClosed?.invoke()
-        pingManager.onConnectionClosed()
-
-        if (isActive) {
-          if (isRefreshPrepare) {
-            isRefreshPrepare = false
-            state = ChannelState.PREPARE
-            logOutput.info("closed to refresh")
-            onPrepareConnection()
-          } else {
-            logOutput.info("closed to schedule retry")
-            onScheduleRetryConnection()
-          }
-        } else {
-          logOutput.info("closed with channel inactive")
-        }
-        listeners.forEach { it.onChannelInactive() }
-      }
-      is SendMessage -> if (isActive) {
-        messages.add(message.data)
-
-        when(state) {
-          ChannelState.CLOSED -> {
-            state = ChannelState.PREPARE
-            onResetRetryConnection()
-            onPrepareConnection()
-          }
-          ChannelState.WAIT_PREPARE,
-          ChannelState.PREPARE,
-          ChannelState.CLOSING -> {
-            // do nothing
-          }
-          ChannelState.OPEN -> {
-            val writer = activeWriter ?: return
-            sendMessagesAll(writer)
-          }
-        }
-      }
-      is PingMessage -> {
-        if (isActive && state == ChannelState.OPEN) {
-          val writer = activeWriter ?: return
-          writer.write(message.data)
-        } else {
-          logOutput.trace("ping cancelled: ${message.data}")
-        }
-      }
-      is ConnectionComplete -> {
-        onResetRetryConnection()
-        onOpen?.invoke()
-        activeWriter = message.writer
-        state = ChannelState.OPEN
-        isRefreshPrepare = false
-        sendMessagesAll(message.writer)
-        pingManager.onConnectionComplete()
-
-        if (!isActive) {
-          state = ChannelState.CLOSING
-          onCloseConnection()
-        } else {
-          listeners.forEach { it.onChannelActive(message.writer) }
-        }
-      }
-      is ConnectionFailure -> {
-        activeWriter = null
-        state = ChannelState.CLOSED
-        isRefreshPrepare = false
-        onError?.invoke(message.error)
-
-        if (isActive) {
-          pingManager.onConnectionFailure()
-          onScheduleRetryConnection()
-        } else {
-          logOutput.info("retry cancelled: channel inactive")
-        }
-        listeners.forEach { it.onChannelInactive() }
-      }
-      is AddListener -> {
-        val changed = listeners.add(message.data)
-
-        if (changed) {
-          message.data.bind(logOutput)
-
-          if (isActive && state == ChannelState.OPEN) {
-            val writer = activeWriter ?: return
-            message.data.onChannelActive(writer)
-          }
-        }
-      }
-      is RemoveListener -> {
-        val changed = listeners.remove(message.data)
-
-        if (changed) {
-          message.data.onChannelInactive()
-        }
-      }
-    }
-  }
-
-  private fun checkAndCloseConnection() {
-    when(state) {
-      ChannelState.CLOSED,
-      ChannelState.PREPARE,
-      ChannelState.CLOSING -> {
-        // do nothing
-      }
-      ChannelState.WAIT_PREPARE -> {
-        state = ChannelState.CLOSED
-        limiter.cancelRequest(this)
-      }
-      ChannelState.OPEN -> {
-        val writer = activeWriter
-
-        if (writer == null) {
-          state = ChannelState.CLOSED
-        } else {
-          state = ChannelState.CLOSING
-          writer.close()
-        }
-      }
-    }
-  }
-
-  /**
-   * Prepare connection
-   */
-  private fun onPrepareConnection() {
-    handler.onPrepareConnection(stateListener)
-  }
-
-  /**
-   * Close connection
-   */
-  private fun onCloseConnection() {
-    val writer = activeWriter ?: return
-    activeWriter = null
-
-    try {
-      writer.close()
-    } catch (e: Exception) {
-      onError?.invoke(e)
-    }
   }
 
   private fun notifyPingRequired(message: Any) {
-    messageQueue.submit(PingMessage(message))
-  }
-
-  private fun notifyWaitPrepareConnection() {
-    messageQueue.submit(WAIT_PREPARE)
-  }
-
-  private fun notifyPrepareConnection() {
-    messageQueue.submit(PREPARE)
+    messageQueue?.submit(SessionHandler.PingMessage(message))
   }
 
   private fun notifyRestartConnection() {
-    messageQueue.submit(REFRESH_PREPARE)
+    messageQueue?.submit(SessionHandler.REFRESH_PREPARE)
   }
-
-  /**
-   * Send message
-   */
-  private data class SendMessage(
-    val data: Any
-  )
-
-  /**
-   * Ping message
-   */
-  private data class PingMessage(
-    val data: Any
-  )
-
-  /**
-   * Connection complete
-   */
-  private data class ConnectionComplete(
-    val writer: MessageChannel.ChannelWriter
-  )
-
-  /**
-   * Connection failure
-   */
-  private data class ConnectionFailure(
-    val error: Throwable
-  )
-
-  /* -- task :end -- */
-
-  /* -- retry :begin -- */
-
-  private val retryManager = RetryManager(retryOptions ?: RetryOptions())
-  private var retryTask: Future<*>? = null
-
-  private fun onScheduleRetryConnection() {
-    clearRetryTask()
-
-    if (!requiresConnectionActive()) {
-      logOutput.info("schedule retry cancelled, channel active: $isActive, messages: ${messages.size}")
-      return
-    }
-    val duration = retryManager.nextInterval() ?: return
-    retryTask = scheduledExecutor.schedule(this::notifyWaitPrepareConnection, duration.toMillis(), TimeUnit.MILLISECONDS)
-    logOutput.info("schedule retry prepare: ${duration.toMillis()} ms")
-  }
-
-  private fun onResetRetryConnection() {
-    clearRetryTask()
-    retryManager.reset()
-  }
-
-  private fun clearRetryTask() {
-    val task = retryTask ?: return
-    retryTask = null
-    task.checkAndCancel()
-  }
-
-  private fun requiresConnectionActive(): Boolean {
-    return when {
-      !isActive -> false
-      retryManager.ignoreMessageSize || messages.isNotEmpty() -> true
-      else -> listeners.any { it.requiresConnectionActive() }
-    }
-  }
-
-  /* -- retry :end -- */
-
-  /* -- event :begin -- */
-
-  private val listeners = mutableSetOf<MessageChannel.ChannelListener>()
 
   /**
    * Add channel [listener]
    */
   fun addChannelListener(listener: MessageChannel.ChannelListener) {
-    messageQueue.submit(AddListener(listener))
+    messageQueue?.submit(SessionHandler.AddChannelListener(listener))
   }
 
   /**
    * Remove channel [listener]
    */
   fun removeChannelListener(listener: MessageChannel.ChannelListener) {
-    messageQueue.submit(RemoveListener(listener))
-  }
-
-  /**
-   * Add listener
-   */
-  private data class AddListener(
-    val data: MessageChannel.ChannelListener
-  )
-
-  /**
-   * Remove listener
-   */
-  private data class RemoveListener(
-    val data: MessageChannel.ChannelListener
-  )
-
-  /* -- event :end -- */
-
-  private fun sendMessagesAll(writer: MessageChannel.ChannelWriter) {
-    if (messages.isEmpty()) {
-      return
-    }
-    messages.forEach {
-      writer.write(it)
-    }
-    messages.clear()
-  }
-
-  companion object {
-    private const val REFRESH_PREPARE = "restart_prepare"
-    private const val WAIT_PREPARE = "wait_prepare"
-    private const val PREPARE = "prepare"
-    private const val CLOSE = "close"
-    private const val CLOSE_COMPLETE = "close_complete"
+    messageQueue?.submit(SessionHandler.RemoveChannelListener(listener))
   }
 
 }

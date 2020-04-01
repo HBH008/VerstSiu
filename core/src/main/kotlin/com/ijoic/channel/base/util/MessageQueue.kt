@@ -24,7 +24,7 @@ import java.util.concurrent.ExecutorService
  */
 internal class MessageQueue<MESSAGE: Any>(
   executor: ExecutorService,
-  private val handleMessage: (MESSAGE) -> Unit
+  private val handler: Handler<MESSAGE>
 ) {
 
   private var executorImpl: ExecutorService? = executor
@@ -34,7 +34,7 @@ internal class MessageQueue<MESSAGE: Any>(
    */
   fun submit(message: MESSAGE) {
     val executor = executorImpl ?: return
-    executor.submit { handleMessage(message) }
+    executor.submit { handler.dispatchMessage(message) }
   }
 
   /**
@@ -42,5 +42,15 @@ internal class MessageQueue<MESSAGE: Any>(
    */
   fun destroy() {
     executorImpl = null
+  }
+
+  /**
+   * Handler
+   */
+  interface Handler<MESSAGE> {
+    /**
+     * Dispatch [message]
+     */
+    fun dispatchMessage(message: MESSAGE)
   }
 }
