@@ -71,27 +71,20 @@ class WebSocketChannel(options: Options) : MessageChannel(
       .url(options.url)
       .build()
 
-    private val client = OkHttpClient.Builder()
-      .apply {
-        val host = options.proxyHost
-        val port = options.proxyPort
-
-        if (!host.isNullOrBlank() && port != null) {
-          proxy(Proxy(Proxy.Type.HTTP, InetSocketAddress(host, port)))
-        }
-      }
-      .build()
-
+    private val clientHelper = ClientHelper(options)
     private val decodeBytes: ((ByteArray) -> String?)? = options.decodeBytes
 
     override fun onPrepareConnection(listener: StateListener) {
+      val client = clientHelper.getConnectClient()
       client.newWebSocket(request, object : WebSocketListener() {
         override fun onOpen(webSocket: WebSocket, response: Response) {
+          clientHelper.reportConnectionSuccess()
           logOutput?.info("connection open")
           listener.onConnectionComplete(WebSocketWriter(webSocket))
         }
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+          clientHelper.reportConnectionFailure()
           logOutput?.error("connection failure: ${response?.code}", t)
           listener.onConnectionFailure(t)
         }
@@ -126,6 +119,68 @@ class WebSocketChannel(options: Options) : MessageChannel(
   }
 
   /**
+   * Client helper
+   */
+  private class ClientHelper(
+    private val options: Options
+  ) {
+
+    private val refreshFailCount = options.failCountToRefreshConnectClient
+    private var client: OkHttpClient? = null
+    private val clientLock = Object()
+
+    private var failCount = 0
+
+    /**
+     * Returns connect client instance
+     */
+    fun getConnectClient(): OkHttpClient {
+      synchronized(clientLock) {
+        val oldClient = this.client
+        val client: OkHttpClient
+
+        when {
+          oldClient == null || refreshFailCount in 1..failCount -> {
+            client = createConnectClient()
+            this.client = client
+          }
+          else -> {
+            client = oldClient
+          }
+        }
+        return client
+      }
+    }
+
+    private fun createConnectClient(): OkHttpClient {
+      return OkHttpClient.Builder()
+        .apply {
+          val host = options.proxyHost
+          val port = options.proxyPort
+
+          if (!host.isNullOrBlank() && port != null) {
+            proxy(Proxy(Proxy.Type.HTTP, InetSocketAddress(host, port)))
+          }
+        }
+        .build()
+    }
+
+    /**
+     * Report connection success
+     */
+    fun reportConnectionSuccess() {
+      failCount = 0
+    }
+
+    /**
+     * Report connection failure
+     */
+    fun reportConnectionFailure() {
+      ++failCount
+    }
+  }
+
+  /**
    * Options
    */
   data class Options(
@@ -135,7 +190,8 @@ class WebSocketChannel(options: Options) : MessageChannel(
     val proxyPort: Int? = null,
     val pingOptions: PingOptions? = null,
     val retryOptions: RetryOptions? = null,
-    val decodeBytes: ((ByteArray) -> String?)? = null
+    val decodeBytes: ((ByteArray) -> String?)? = null,
+    val failCountToRefreshConnectClient: Int = 0
   )
 
 }
