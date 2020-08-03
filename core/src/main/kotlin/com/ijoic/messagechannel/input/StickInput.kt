@@ -33,14 +33,14 @@ class StickInput : ChannelInput() {
   /**
    * Add [message]
    */
-  private fun add(message: String) {
+  fun add(message: String) {
     messages = messages.plus(message)
   }
 
   /**
    * Add [messages] all
    */
-  private fun addAll(messages: Collection<String>) {
+  fun addAll(messages: Collection<String>) {
     this.messages = this.messages.plus(messages)
   }
 
